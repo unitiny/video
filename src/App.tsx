@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ART_ASSETS, INTEL_ASSETS, INTEL_V2_ASSETS } from './video/theme';
+import { ART_ASSETS, INTEL_ASSETS, INTEL_V2_ASSETS, INTEL_V2_VIDEO_SAMPLE } from './video/theme';
 import type { LoadedVideoImages } from './video/renderer/renderFrame';
 import type { LoadedIntelImages } from './video/intel/renderIntelFrame';
 import { loadRealVideoFrameCache } from './video/intelV2/videoFrameCache';
@@ -36,10 +36,10 @@ export default function App() {
     async function loadVideo() {
       const videoCache = await loadRealVideoFrameCache(
         INTEL_V2_ASSETS.realKeyDayVideo,
-        42,
-        2.65,
-        480,
-        854,
+        INTEL_V2_VIDEO_SAMPLE.sampleCount,
+        INTEL_V2_VIDEO_SAMPLE.maxSec,
+        INTEL_V2_VIDEO_SAMPLE.outW,
+        INTEL_V2_VIDEO_SAMPLE.outH,
         (partial) => {
           if (!cancelled) {
             setIntelImages((prev) => ({
@@ -49,8 +49,8 @@ export default function App() {
             }));
           }
         },
-        0.05,
-        0.5
+        INTEL_V2_VIDEO_SAMPLE.minSec,
+        INTEL_V2_VIDEO_SAMPLE.cropCenterRatio
       );
       if (!cancelled) {
         setIntelImages((prev) => ({
@@ -76,6 +76,7 @@ export default function App() {
         realTraderGesturing,
         realTraderShocked,
         eventMuskRealKitchen,
+        realKeyDayPoster,
       ] = await Promise.all([
         loadImageElement(ART_ASSETS.openArcher),
         loadImageElement(ART_ASSETS.noonSlap),
@@ -90,6 +91,7 @@ export default function App() {
         loadImageElement(INTEL_V2_ASSETS.realTraderGesturing),
         loadImageElement(INTEL_V2_ASSETS.realTraderShocked),
         loadImageElement(INTEL_V2_ASSETS.eventMuskRealKitchen),
+        loadImageElement(INTEL_V2_ASSETS.realKeyDayPoster),
       ]);
       if (!cancelled) {
         setImages({ openArcher, noonSlap, twoSheep, lithographyHero, morningBrief });
@@ -103,6 +105,7 @@ export default function App() {
           realTraderGesturing,
           realTraderShocked,
           eventMuskRealKitchen,
+          realKeyDayPoster,
         }));
       }
     }

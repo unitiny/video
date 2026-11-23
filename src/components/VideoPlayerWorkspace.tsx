@@ -476,7 +476,7 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
             <section className="bg-white border border-neutral-200 rounded-xl p-6">
               <div className="flex items-center justify-between gap-2 mb-3">
                 <h3 className="text-sm font-bold text-neutral-900 min-w-0 truncate">
-                  v2 精修分镜跳转（抱头震惊 · 实盘日K分时 · 聚光推演）
+                  v2 精修分镜跳转（急电看表 · 实盘日K分时 · 聚光推演）
                 </h3>
                 <span className="text-xs text-neutral-500 font-mono-num whitespace-nowrap shrink-0">
                   共 {Math.round(INTEL_V2_SPEC.durationSec)} 秒节奏
@@ -515,7 +515,7 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
             <section className="bg-white border border-neutral-200 rounded-xl p-6">
               <h3 className="text-sm font-bold text-neutral-900 mb-1">v2 极速开屏 + 实盘核对日K分时 + 真人肖像</h3>
               <p className="text-xs text-neutral-500 mb-3">
-                01 段压缩至 2.6s 极速抓眼球：抱头震惊连续实拍 + 52–54px 精炼核心数据弹幕 + 光刃清屏转场；02 段全部核对真实交易所日K分时并在 A50 展毕多停 1 秒；05 段真人马斯克肖像。
+                01 段压缩至 2.6s 极速抓眼球：商务急电抬腕看表连续实拍 + 52–54px 精炼核心数据弹幕 + 光刃清屏转场；02 段全部核对真实交易所日K分时并在 A50 展毕多停 1 秒；05 段真人马斯克肖像。
               </p>
               <div className="grid grid-cols-4 gap-2.5">
                 {[

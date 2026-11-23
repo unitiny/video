@@ -34,9 +34,9 @@ export const INTEL_V2_SHOTS: IntelV2ShotSpec[] = [
     endSec: 2.6,
     kind: 'v2_keyday_video_intro',
     title: '2.6秒极速开屏：「今天很关键」波普动效 + 精炼大字弹幕 → 光刃清屏',
-    subtitle: '连续抱头震惊实拍 + 5道 52–54px 精炼核心数据弹幕 + 拼贴炸裂「今天很关键」并极速清屏',
+    subtitle: '商务急电抬腕看表实拍 + 5道 52–54px 精炼核心数据弹幕 + 拼贴炸裂「今天很关键」并极速清屏',
     editorialCraft: '零废话极速进场 + 弹幕瞬时齐览快滑 + 立体波普标题扫光 + 光刃闭幕转场',
-    focusGoal: '2.6 秒内完成强情绪吸睛、核心行情速览与干净清屏转场，不耗费观众耐心',
+    focusGoal: '2.6 秒内完成强紧迫感吸睛、核心行情速览与干净清屏转场，不耗费观众耐心',
   },
   {
     id: 'v2-02-indices-board',

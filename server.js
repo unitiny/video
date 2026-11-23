@@ -860,8 +860,8 @@ var INTEL_V2_DATA = {
       {
         text: "\u5468\u4E00\u558A\u5173\u952E \xB7 \u4ECA\u5929\u771F\u51B3\u6218!",
         color: "#FBBF24",
-        y: 192,
-        fontSize: 54,
+        y: 128,
+        fontSize: 52,
         speed: 4.8,
         offset: 120,
         delay: 0
@@ -869,37 +869,37 @@ var INTEL_V2_DATA = {
       {
         text: "\u26A0\uFE0F \u7EB3\u6307 -5.28% \xB7 \u8D39\u534A -10.73%",
         color: "#F87171",
-        y: 280,
+        y: 806,
         fontSize: 52,
         speed: 5.2,
-        offset: 210,
+        offset: 160,
         delay: 2
       },
       {
         text: "\u{1F4A5} \u9EC4\u91D1 -4.62% \xB7 \u5929\u7136\u6C14 +3.44%",
         color: "#38BDF8",
-        y: 1094,
+        y: 892,
         fontSize: 52,
         speed: 5,
-        offset: 110,
+        offset: 95,
         delay: 3
       },
       {
         text: "\u{1F30F} \u65E5\u7ECF -5.06% \xB7 \u97E9\u80A1 -5.21%",
         color: "#34D399",
-        y: 1182,
+        y: 978,
         fontSize: 52,
         speed: 4.6,
-        offset: 220,
+        offset: 195,
         delay: 4
       },
       {
         text: "\u{1F4CA} A50 \u6025\u63A2 -2.3% \u540E\u9707\u7A33 -1.35%",
         color: "#FEF3C7",
-        y: 1270,
-        fontSize: 52,
+        y: 1802,
+        fontSize: 54,
         speed: 5.1,
-        offset: 95,
+        offset: 88,
         delay: 5
       }
     ]
@@ -1183,9 +1183,9 @@ var INTEL_V2_SHOTS = [
     endSec: 2.6,
     kind: "v2_keyday_video_intro",
     title: "2.6\u79D2\u6781\u901F\u5F00\u5C4F\uFF1A\u300C\u4ECA\u5929\u5F88\u5173\u952E\u300D\u6CE2\u666E\u52A8\u6548 + \u7CBE\u70BC\u5927\u5B57\u5F39\u5E55 \u2192 \u5149\u5203\u6E05\u5C4F",
-    subtitle: "\u8FDE\u7EED\u62B1\u5934\u9707\u60CA\u5B9E\u62CD + 5\u9053 52\u201354px \u7CBE\u70BC\u6838\u5FC3\u6570\u636E\u5F39\u5E55 + \u62FC\u8D34\u70B8\u88C2\u300C\u4ECA\u5929\u5F88\u5173\u952E\u300D\u5E76\u6781\u901F\u6E05\u5C4F",
+    subtitle: "\u5546\u52A1\u6025\u7535\u62AC\u8155\u770B\u8868\u5B9E\u62CD + 5\u9053 52\u201354px \u7CBE\u70BC\u6838\u5FC3\u6570\u636E\u5F39\u5E55 + \u62FC\u8D34\u70B8\u88C2\u300C\u4ECA\u5929\u5F88\u5173\u952E\u300D\u5E76\u6781\u901F\u6E05\u5C4F",
     editorialCraft: "\u96F6\u5E9F\u8BDD\u6781\u901F\u8FDB\u573A + \u5F39\u5E55\u77AC\u65F6\u9F50\u89C8\u5FEB\u6ED1 + \u7ACB\u4F53\u6CE2\u666E\u6807\u9898\u626B\u5149 + \u5149\u5203\u95ED\u5E55\u8F6C\u573A",
-    focusGoal: "2.6 \u79D2\u5185\u5B8C\u6210\u5F3A\u60C5\u7EEA\u5438\u775B\u3001\u6838\u5FC3\u884C\u60C5\u901F\u89C8\u4E0E\u5E72\u51C0\u6E05\u5C4F\u8F6C\u573A\uFF0C\u4E0D\u8017\u8D39\u89C2\u4F17\u8010\u5FC3"
+    focusGoal: "2.6 \u79D2\u5185\u5B8C\u6210\u5F3A\u7D27\u8FEB\u611F\u5438\u775B\u3001\u6838\u5FC3\u884C\u60C5\u901F\u89C8\u4E0E\u5E72\u51C0\u6E05\u5C4F\u8F6C\u573A\uFF0C\u4E0D\u8017\u8D39\u89C2\u4F17\u8010\u5FC3"
   },
   {
     id: "v2-02-indices-board",

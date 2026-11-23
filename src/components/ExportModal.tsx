@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, Film, Music, X } from 'lucide-react';
-import { INTEL_V2_ASSETS, VIDEO_SPEC } from '../video/theme';
+import { INTEL_V2_ASSETS, INTEL_V2_VIDEO_SAMPLE, VIDEO_SPEC } from '../video/theme';
 import { PROJECT_TEMPLATES } from '../video/data/fundFlowData';
 import { renderVideoFrame, type LoadedVideoImages } from '../video/renderer/renderFrame';
 import { INTEL_VIDEO_SPEC } from '../video/intel/intelData';
@@ -114,7 +114,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
     let exportIntelImages = intelImages;
     if (isV2 && (!exportIntelImages.realKeyDayFrames || exportIntelImages.realKeyDayFrames.length === 0)) {
-      const videoCache = await loadRealVideoFrameCache(INTEL_V2_ASSETS.realKeyDayVideo);
+      const videoCache = await loadRealVideoFrameCache(
+        INTEL_V2_ASSETS.realKeyDayVideo,
+        INTEL_V2_VIDEO_SAMPLE.sampleCount,
+        INTEL_V2_VIDEO_SAMPLE.maxSec,
+        INTEL_V2_VIDEO_SAMPLE.outW,
+        INTEL_V2_VIDEO_SAMPLE.outH,
+        undefined,
+        INTEL_V2_VIDEO_SAMPLE.minSec,
+        INTEL_V2_VIDEO_SAMPLE.cropCenterRatio
+      );
       exportIntelImages = {
         ...exportIntelImages,
         realKeyDayVideo: videoCache.video,

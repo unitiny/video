@@ -80,10 +80,20 @@ export const INTEL_ASSETS = {
 } as const;
 
 export const INTEL_V2_ASSETS = {
-  realKeyDayVideo: '/src/assets/videos/real_keyday_shock_4508.mp4',
-  realKeyDayPoster: '/src/assets/images/real_keyday_4508_poster.jpg',
+  realKeyDayVideo: '/src/assets/videos/real_keyday_watch_45749.mp4',
+  realKeyDayPoster: '/src/assets/images/real_keyday_watch_poster.jpg',
   realNyseClap: '/src/assets/images/real_nyse_0047.jpg',
   realTraderGesturing: '/src/assets/images/real_peter_cube.jpg',
   realTraderShocked: '/src/assets/images/real_peter_tuchman.jpg',
   eventMuskRealKitchen: '/src/assets/images/event_musk_real_kitchen_1795248294473.jpg',
 } as const;
+
+export const INTEL_V2_VIDEO_SAMPLE = {
+  sampleCount: 42,
+  minSec: 2.05,
+  maxSec: 4.65,
+  outW: 480,
+  outH: 854,
+  cropCenterRatio: 0.27,
+} as const;
+

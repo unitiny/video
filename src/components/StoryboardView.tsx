@@ -25,7 +25,7 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({
               11.20 v2 精修爆款版 · 「震撼实拍玩梗 × 全球日K分时拆解 × 聚光推演」{INTEL_V2_SHOTS.length} 段分镜
             </h2>
             <p className="text-sm text-neutral-600 mt-1">
-              01 压缩至 2.6 秒极速开屏（抱头震惊实拍 + 52–54px 精炼核心数据弹幕 + 光刃清屏转场）；02 100% 核对实盘日K与全天真实分时并在 A50 展毕多停 1 秒；旧版保留在「11.20 v1 存档」中。
+              01 压缩至 2.6 秒极速开屏（商务急电抬腕看表实拍 + 52–54px 精炼核心数据弹幕 + 光刃清屏转场）；02 100% 核对实盘日K与全天真实分时并在 A50 展毕多停 1 秒；旧版保留在「11.20 v1 存档」中。
             </p>
           </div>
           <div className="text-xs text-neutral-500 font-mono-num">
@@ -89,7 +89,7 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({
 
         <section className="bg-white border border-neutral-200 rounded-xl p-6 space-y-4">
           <div>
-            <h3 className="text-base font-bold text-neutral-900">v2 震撼实拍视频与定制视觉（01 抱头震惊实拍 · 05 真人马斯克肖像）</h3>
+            <h3 className="text-base font-bold text-neutral-900">v2 震撼实拍视频与定制视觉（01 商务急电看表实拍 · 05 真人马斯克肖像）</h3>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
             {[
@@ -97,7 +97,7 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({
                 title: '01 · 2.6秒「今天很关键」极速开屏',
                 frame: 28,
                 src: INTEL_V2_ASSETS.realKeyDayPoster,
-                prompt: '抱头震惊连续实拍 + 5道 52–54px 精炼弹幕瞬时齐览 + 光刃清屏转场',
+                prompt: '商务急电抬腕看表实拍 + 5道 52–54px 精炼弹幕瞬时齐览 + 光刃清屏转场',
               },
               {
                 title: '02 · 全球实盘日 K 与真实分时',

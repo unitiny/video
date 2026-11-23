@@ -18,6 +18,7 @@ export interface LoadedIntelImages {
   eventMuskRealKitchen?: HTMLImageElement | null;
   realKeyDayVideo?: HTMLVideoElement | null;
   realKeyDayFrames?: HTMLCanvasElement[] | null;
+  realKeyDayPoster?: HTMLImageElement | null;
 }
 
 const FONT = '"Noto Sans SC", "Plus Jakarta Sans", "PingFang SC", "Microsoft YaHei", sans-serif';

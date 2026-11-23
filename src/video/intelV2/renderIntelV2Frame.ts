@@ -514,7 +514,7 @@ function renderV2KeyDayVideoScene(
     return;
   }
 
-  // Pick continuous live-action shock reaction frame (accelerated 0..56 expressive reaction + subtle micro-pulse 56..66)
+  // Pick continuous live-action watch-check urgency frame (accelerated 0..56 raise-wrist action + subtle micro-pulse 56..66)
   const videoFrames = images.realKeyDayFrames;
   let mediaSrc: CanvasImageSource | null | undefined = null;
   let vidProg = clamp(localF / 56, 0, 1);
@@ -528,7 +528,7 @@ function renderV2KeyDayVideoScene(
   } else if (images.realKeyDayVideo && images.realKeyDayVideo.readyState >= 2) {
     mediaSrc = images.realKeyDayVideo;
   } else {
-    mediaSrc = images.realTraderShocked;
+    mediaSrc = images.realKeyDayPoster ?? images.realNyseClap;
   }
 
   // 1. Full-Screen Real Live-Action Video Layer (shutter close at f=64..74 with razor light seam)
@@ -568,11 +568,12 @@ function renderV2KeyDayVideoScene(
       ctx.fillRect(0, 0, width, height);
     }
 
-    const topScrim = ctx.createLinearGradient(0, 0, 0, 390);
-    topScrim.addColorStop(0, 'rgba(9, 13, 20, 0.8)');
+    const topScrim = ctx.createLinearGradient(0, 0, 0, 420);
+    topScrim.addColorStop(0, 'rgba(9, 13, 20, 0.9)');
+    topScrim.addColorStop(0.45, 'rgba(9, 13, 20, 0.52)');
     topScrim.addColorStop(1, 'rgba(9, 13, 20, 0)');
     ctx.fillStyle = topScrim;
-    ctx.fillRect(0, 0, width, 390);
+    ctx.fillRect(0, 0, width, 420);
 
     const botScrim = ctx.createLinearGradient(0, height - 920, 0, height);
     botScrim.addColorStop(0, 'rgba(9, 13, 20, 0)');
@@ -657,7 +658,7 @@ function renderV2KeyDayVideoScene(
   // 4. Snappy Pop-Art Kinetic Stamp Composition: "今天很关键" (enters f=3..16, clears f=60..67)
   const headExitE = easeOutCubic(exit.headlineExit);
   if (localF >= 3 && headExitE < 0.99) {
-    const heroY = 1585 + lerp(0, 380, headExitE);
+    const heroY = 1565 + lerp(0, 380, headExitE);
     const enterP = clamp((localF - 4) / 10, 0, 1);
     const springScale =
       (enterP < 1 ? lerp(2.15, 1.0, easeOutBack(enterP)) : 1 + 0.02 * Math.sin(localF * 0.24)) *
@@ -730,7 +731,7 @@ function renderV2KeyDayVideoScene(
     ctx.textBaseline = 'middle';
     ctx.font = `900 30px ${FONT}`;
     ctx.fillStyle = '#090D14';
-    ctx.fillText('⚡ 今日盘前第一信号', 0, -2);
+    ctx.fillText('● 今日盘前第一信号', 0, -2);
     ctx.restore();
 
     // C) Split Kinetic 3D Comic Wordmark: "今天" · "[很]" · "关键!!"
