@@ -1,0 +1,6 @@
+{
+  "name": "QuantReel Studio — 金融短视频逐帧复刻与生产工作台",
+  "description": "1080×2352 30fps 逐帧代码复刻与智能生产工作台：完整复刻「1117收盘｜收盘资金流向」28条曲线、10段分镜与129.2 BPM音轨，并支持盘前早报模板生成与FFmpeg MP4成品导出。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
