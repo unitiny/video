@@ -5,17 +5,186 @@ import { ART_ASSETS, INTEL_ASSETS, INTEL_V2_ASSETS } from '../video/theme';
 import { INTEL_SHOTS } from '../video/intel/intelTimeline';
 import { INTEL_V2_SPEC } from '../video/intelV2/intelV2Data';
 import { INTEL_V2_SHOTS } from '../video/intelV2/intelV2Timeline';
+import type { EpisodeManifest } from '../video/engine/schema';
+import { compileEpisodeTimeline, type CompiledShot } from '../video/engine/timeline';
 import type { StudioProjectMode } from './VideoPlayerWorkspace';
 
 interface StoryboardViewProps {
   projectMode: StudioProjectMode;
+  activeEpisode?: EpisodeManifest | null;
   onJumpToFrame: (frame: number) => void;
+}
+
+function getCompiledShotAsset(shot: CompiledShot): string | null {
+  const { scene } = shot;
+  if (scene.kind === 'hook_live_video') {
+    return scene.data.posterSrc || null;
+  }
+  if (
+    scene.kind === 'event_flow_funnel' ||
+    scene.kind === 'event_dual_spotlight' ||
+    scene.kind === 'event_timeline'
+  ) {
+    return scene.data.imageSrc || null;
+  }
+  return null;
 }
 
 export const StoryboardView: React.FC<StoryboardViewProps> = ({
   projectMode,
+  activeEpisode = null,
   onJumpToFrame,
 }) => {
+  if (projectMode === 'episode') {
+    if (!activeEpisode) {
+      return (
+        <div className="bg-white border border-neutral-200 rounded-xl p-8 text-center space-y-2">
+          <h2 className="text-lg font-bold text-neutral-900">尚未加载每日动态剧集</h2>
+          <p className="text-sm text-neutral-500">
+            请回到「逐帧播放器」选择一期剧集或点击刷新列表，也可以切换查看旧版存档分镜。
+          </p>
+        </div>
+      );
+    }
+
+    const timeline = compileEpisodeTimeline(activeEpisode);
+    const assetCards = timeline.shots
+      .map((shot) => {
+        const src = getCompiledShotAsset(shot);
+        if (!src) return null;
+        return {
+          id: shot.id,
+          title: `${String(shot.index).padStart(2, '0')} · ${shot.title}`,
+          frame: shot.startFrame + Math.min(24, Math.floor(shot.durationFrames / 3)),
+          src,
+          prompt: shot.subtitle,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+
+    return (
+      <div className="space-y-8">
+        <section className="bg-white border border-neutral-200 rounded-xl p-6 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-bold text-neutral-900">
+              {activeEpisode.title} · {timeline.shots.length} 段动态分镜
+            </h2>
+            <p className="text-sm text-neutral-600 mt-1">
+              {activeEpisode.description}
+              {activeEpisode.metadata?.sourceSummary
+                ? ` · ${activeEpisode.metadata.sourceSummary}`
+                : ''}
+            </p>
+          </div>
+          <div className="text-xs text-neutral-500 font-mono-num">
+            {activeEpisode.date} · {timeline.width} × {timeline.height} · {timeline.fps} fps ·{' '}
+            {timeline.totalFrames} 帧 · {timeline.durationSec.toFixed(2)}s · {timeline.bpm} BPM
+          </div>
+        </section>
+
+        <section className="bg-white border border-neutral-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-neutral-200 bg-neutral-50 text-xs font-semibold text-neutral-600">
+                  <th className="py-3.5 px-4 whitespace-nowrap">段号</th>
+                  <th className="py-3.5 px-4 whitespace-nowrap">帧范围 / 时长</th>
+                  <th className="py-3.5 px-4 whitespace-nowrap">主题与核心文案</th>
+                  <th className="py-3.5 px-4">高级动态设计（Vox / 财联社级）</th>
+                  <th className="py-3.5 px-4">视觉降噪与重点提炼</th>
+                  <th className="py-3.5 px-4 text-right whitespace-nowrap">预览定位</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-100 text-sm">
+                {timeline.shots.map((shot) => (
+                  <tr key={shot.id} className="hover:bg-neutral-50/80 transition-colors align-top">
+                    <td className="py-4 px-4 font-mono-num font-bold text-neutral-900 whitespace-nowrap">
+                      {String(shot.index).padStart(2, '0')}
+                    </td>
+                    <td className="py-4 px-4 font-mono-num whitespace-nowrap">
+                      <div className="font-semibold text-neutral-900">
+                        {shot.startFrame}–{shot.endFrame} 帧
+                      </div>
+                      <div className="text-xs text-neutral-500 mt-0.5">
+                        {shot.startSec.toFixed(1)}s–{shot.endSec.toFixed(1)}s
+                      </div>
+                    </td>
+                    <td className="py-4 px-4 min-w-[200px]">
+                      <div className="font-semibold text-neutral-900">{shot.title}</div>
+                      <div className="text-xs text-neutral-500 mt-1">{shot.subtitle}</div>
+                    </td>
+                    <td className="py-4 px-4 min-w-[220px]">
+                      <div className="text-xs text-neutral-800 leading-relaxed">
+                        {shot.editorialCraft}
+                      </div>
+                    </td>
+                    <td className="py-4 px-4 min-w-[220px]">
+                      <div className="text-xs font-medium text-[#C8342A] leading-relaxed">
+                        {shot.focusGoal}
+                      </div>
+                    </td>
+                    <td className="py-4 px-4 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => onJumpToFrame(shot.startFrame)}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-neutral-200 hover:border-[#C8342A] hover:text-[#C8342A] text-xs font-medium text-neutral-700 transition-colors whitespace-nowrap shrink-0"
+                      >
+                        <span>跳至第 {shot.startFrame} 帧</span>
+                        <ArrowUpRight className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {assetCards.length > 0 && (
+          <section className="bg-white border border-neutral-200 rounded-xl p-6 space-y-4">
+            <div>
+              <h3 className="text-base font-bold text-neutral-900">
+                本期视觉资产预览（共 {assetCards.length} 组配图 / 实拍钩子）
+              </h3>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+              {assetCards.map((item) => (
+                <div
+                  key={item.id}
+                  className="border border-neutral-200 rounded-lg overflow-hidden flex flex-col"
+                >
+                  <div className="aspect-[3/4] bg-neutral-900 overflow-hidden">
+                    <img
+                      src={item.src}
+                      alt={item.title}
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="p-3.5 flex-1 flex flex-col justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-bold text-neutral-900">{item.title}</div>
+                      <p className="text-[11px] text-neutral-500 mt-1 leading-relaxed">
+                        {item.prompt}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onJumpToFrame(item.frame)}
+                      className="w-full py-1.5 rounded-md bg-neutral-100 hover:bg-neutral-200 text-xs font-medium text-neutral-800 transition-colors"
+                    >
+                      预览该幕画面
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    );
+  }
+
   if (projectMode === '1120_v2') {
     return (
       <div className="space-y-8">

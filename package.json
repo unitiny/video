@@ -9,7 +9,11 @@
     "start": "NODE_ENV=production node server.js",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "bun test",
+    "market:fetch": "bun scripts/fetch-market-data.ts",
+    "episode:new": "bun scripts/create-episode.ts",
+    "episode:validate": "bun scripts/validate-episode.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

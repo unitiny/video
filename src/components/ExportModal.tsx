@@ -8,6 +8,9 @@ import { renderIntelVideoFrame, type LoadedIntelImages } from '../video/intel/re
 import { INTEL_V2_SPEC } from '../video/intelV2/intelV2Data';
 import { renderIntelV2VideoFrame } from '../video/intelV2/renderIntelV2Frame';
 import { loadRealVideoFrameCache } from '../video/intelV2/videoFrameCache';
+import type { EpisodeManifest, LoadedEpisodeAssets } from '../video/engine/schema';
+import { collectEpisodeAssetSources, compileEpisodeTimeline } from '../video/engine/timeline';
+import { renderEpisodeFrame } from '../video/engine/scenes';
 import {
   buildTrackWavBlob,
   exportClientMp4,
@@ -17,12 +20,20 @@ import {
 } from '../video/export/clientMp4Export';
 import type { StudioProjectMode } from './VideoPlayerWorkspace';
 
+const EMPTY_EPISODE_ASSETS: LoadedEpisodeAssets = {
+  imagesBySrc: {},
+  videoFramesBySrc: {},
+  videosBySrc: {},
+};
+
 interface ExportModalProps {
   isOpen: boolean;
   onClose: () => void;
   projectMode: StudioProjectMode;
   images: LoadedVideoImages;
   intelImages: LoadedIntelImages;
+  activeEpisode?: EpisodeManifest | null;
+  episodeAssets?: LoadedEpisodeAssets;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -31,6 +42,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   projectMode,
   images,
   intelImages,
+  activeEpisode = null,
+  episodeAssets = EMPTY_EPISODE_ASSETS,
 }) => {
   const [resolutionMode, setResolutionMode] = useState<'full' | 'fast'>('full');
   const [status, setStatus] = useState<'idle' | 'rendering' | 'muxing' | 'done' | 'error'>('idle');
@@ -56,43 +69,56 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    revokeBlobUrl();
+    setStatus('idle');
+    setRenderedCount(0);
+    setDownloadUrl(null);
+    setEngineBadge('');
+    setPhaseLabel('');
+    setFileSizeMb('');
+    setErrorMsg('');
+  }, [projectMode, activeEpisode?.id]);
+
   if (!isOpen) return null;
 
+  const isEpisode = projectMode === 'episode' && Boolean(activeEpisode);
   const isV2 = projectMode === '1120_v2';
   const isV1Intel = projectMode === '1120_intel';
-  const spec = isV2 ? INTEL_V2_SPEC : isV1Intel ? INTEL_VIDEO_SPEC : VIDEO_SPEC;
+  const compiledTimeline =
+    isEpisode && activeEpisode ? compileEpisodeTimeline(activeEpisode) : null;
+  const spec = compiledTimeline
+    ? {
+        width: compiledTimeline.width,
+        height: compiledTimeline.height,
+        fps: compiledTimeline.fps,
+        totalFrames: compiledTimeline.totalFrames,
+        durationSec: compiledTimeline.durationSec,
+        bpm: compiledTimeline.bpm,
+      }
+    : isV2 || projectMode === 'episode'
+      ? INTEL_V2_SPEC
+      : isV1Intel
+        ? INTEL_VIDEO_SPEC
+        : VIDEO_SPEC;
   const targetW = resolutionMode === 'full' ? spec.width : Math.round(spec.width / 2);
   const targetH = resolutionMode === 'full' ? spec.height : Math.round(spec.height / 2);
-  const trackKey: ExportTrackKey = isV2 ? '1120_v2' : isV1Intel ? '1120' : '1117';
-  const projectLabel = isV2
-    ? '11.20 盘前风向（v2 精修爆款版）'
-    : isV1Intel
-      ? '11.20 盘前风向（v1 存档版）'
-      : PROJECT_TEMPLATES[projectMode === 'morning_brief' ? 'morning_brief' : '1117_close'].name;
-
-  const renderMasterToOutCanvas = (
-    masterCanvas: HTMLCanvasElement,
-    masterCtx: CanvasRenderingContext2D,
-    outCtx: CanvasRenderingContext2D,
-    frameIndex: number
-  ) => {
-    const legacyId = projectMode === 'morning_brief' ? 'morning_brief' : '1117_close';
-    if (isV2) {
-      renderIntelV2VideoFrame(masterCtx, frameIndex, intelImages);
-    } else if (isV1Intel) {
-      renderIntelVideoFrame(masterCtx, frameIndex, intelImages);
-    } else {
-      renderVideoFrame(masterCtx, frameIndex, PROJECT_TEMPLATES[legacyId], images);
-    }
-    if (resolutionMode === 'full') {
-      outCtx.drawImage(masterCanvas, 0, 0);
-    } else {
-      outCtx.drawImage(masterCanvas, 0, 0, targetW, targetH);
-    }
-  };
+  const trackKey: ExportTrackKey = isEpisode || isV2 ? '1120_v2' : isV1Intel ? '1120' : '1117';
+  const episodeId = isEpisode && activeEpisode ? activeEpisode.id : undefined;
+  const projectLabel =
+    isEpisode && activeEpisode
+      ? `${activeEpisode.date} · ${activeEpisode.title}`
+      : isV2
+        ? '11.20 盘前风向（v2 精修爆款版）'
+        : isV1Intel
+          ? '11.20 盘前风向（v1 存档版）'
+          : PROJECT_TEMPLATES[projectMode === 'morning_brief' ? 'morning_brief' : '1117_close'].name;
 
   const handleDownloadWav = () => {
-    const { blob, filename } = buildTrackWavBlob(trackKey);
+    const { blob, filename } = buildTrackWavBlob(
+      trackKey,
+      isEpisode && activeEpisode ? activeEpisode : undefined
+    );
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -104,6 +130,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   };
 
   const handleStartExport = async () => {
+    if (projectMode === 'episode' && !activeEpisode) {
+      setErrorMsg('尚未加载可导出的动态剧集，请先刷新剧集列表或切换至旧版模式。');
+      setStatus('error');
+      return;
+    }
+
     revokeBlobUrl();
     setStatus('rendering');
     setRenderedCount(0);
@@ -131,6 +163,41 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       };
     }
 
+    let exportEpisodeAssets: LoadedEpisodeAssets = episodeAssets;
+    if (isEpisode && activeEpisode) {
+      const { hookVideos } = collectEpisodeAssetSources(activeEpisode);
+      const missingHooks = hookVideos.filter(
+        (hv) =>
+          !exportEpisodeAssets.videoFramesBySrc[hv.videoSrc] ||
+          exportEpisodeAssets.videoFramesBySrc[hv.videoSrc].length === 0
+      );
+      if (missingHooks.length > 0) {
+        const nextVideoFrames = { ...exportEpisodeAssets.videoFramesBySrc };
+        const nextVideos = { ...exportEpisodeAssets.videosBySrc };
+        await Promise.all(
+          missingHooks.map(async (hv) => {
+            const cache = await loadRealVideoFrameCache(
+              hv.videoSrc,
+              hv.sample.sampleCount,
+              hv.sample.maxSec,
+              hv.sample.outW,
+              hv.sample.outH,
+              undefined,
+              hv.sample.minSec,
+              hv.sample.cropCenterRatio
+            );
+            nextVideoFrames[hv.videoSrc] = cache.frames;
+            nextVideos[hv.videoSrc] = cache.video;
+          })
+        );
+        exportEpisodeAssets = {
+          ...exportEpisodeAssets,
+          videoFramesBySrc: nextVideoFrames,
+          videosBySrc: nextVideos,
+        };
+      }
+    }
+
     const renderWithLoadedAssets = (
       masterCanvas: HTMLCanvasElement,
       masterCtx: CanvasRenderingContext2D,
@@ -138,7 +205,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       frameIndex: number
     ) => {
       const legacyId = projectMode === 'morning_brief' ? 'morning_brief' : '1117_close';
-      if (isV2) {
+      if (isEpisode && activeEpisode) {
+        renderEpisodeFrame(masterCtx, frameIndex, activeEpisode, exportEpisodeAssets);
+      } else if (isV2) {
         renderIntelV2VideoFrame(masterCtx, frameIndex, exportIntelImages);
       } else if (isV1Intel) {
         renderIntelVideoFrame(masterCtx, frameIndex, exportIntelImages);
@@ -169,7 +238,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             totalFrames: spec.totalFrames,
             width: targetW,
             height: targetH,
+            fps: spec.fps,
             track: trackKey,
+            ...(episodeId ? { episodeId } : {}),
           }),
         });
         if (initRes.ok) {
@@ -233,13 +304,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           }
 
           setDownloadUrl(finJson.downloadUrl);
-          setDownloadName(getExportFileName(trackKey, 'mp4'));
+          setDownloadName(getExportFileName(trackKey, 'mp4', episodeId));
           setFileSizeMb(((finJson.sizeBytes ?? 0) / (1024 * 1024)).toFixed(2));
           setEngineBadge('服务端 FFmpeg (H.264 + AAC)');
           setStatus('done');
           return;
         } catch (serverErr) {
-          // If server route broke mid-way due to proxy HTML/timeout, fall back transparently to local browser MP4!
+          // If server route broke mid-way due to proxy HTML/timeout or missing FFmpeg (503), fall back transparently to local browser MP4!
           const msg = serverErr instanceof Error ? serverErr.message : '';
           if (msg !== 'SERVER_UNAVAILABLE' && !msg.includes('JSON') && !msg.includes('doctype')) {
             // Still allow local browser fallback so the user always gets their MP4
@@ -256,6 +327,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         width: targetW,
         height: targetH,
         trackKey,
+        episode: isEpisode && activeEpisode ? activeEpisode : undefined,
         renderFrame: (f, _outCanvas, outCtx) => {
           renderWithLoadedAssets(masterCanvas, masterCtx, outCtx, f);
         },
@@ -276,7 +348,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }
   };
 
-  const progressPct = Math.round((renderedCount / spec.totalFrames) * 100);
+  const progressPct = Math.round((renderedCount / Math.max(1, spec.totalFrames)) * 100);
 
   return (
     <div
@@ -292,7 +364,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               导出成品 MP4（H.264 立体声成片）
             </h2>
             <p className="text-xs text-neutral-500 mt-1">
-              当前成片：{projectLabel} · {spec.totalFrames} 帧 · 30 fps · {spec.bpm} BPM 立体声
+              当前成片：{projectLabel} · {spec.totalFrames} 帧 · {spec.fps} fps · {spec.bpm} BPM 立体声
             </p>
           </div>
           <button

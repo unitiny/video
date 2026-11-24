@@ -3,22 +3,126 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
-import { execFile } from 'child_process';
+import { execFile, spawnSync } from 'child_process';
 import { promisify } from 'util';
 import { createServer as createViteServer } from 'vite';
 import { encodeStereoWav, synthesizeTrackPcm } from './src/video/audio/synthAudio';
 import { synthesizeIntelTrackPcm } from './src/video/intel/synthIntelAudio';
 import { synthesizeIntelV2TrackPcm } from './src/video/intelV2/synthIntelV2Audio';
+import type { EpisodeListItem, EpisodeManifest } from './src/video/engine/schema';
+import { compileEpisodeTimeline } from './src/video/engine/timeline';
+import { synthesizeEpisodeAudioPcm } from './src/video/engine/audioSynth';
 
 const execFileAsync = promisify(execFile);
 const PORT = Number(process.env.PORT || 3000);
+const EPISODE_ID_RE = /^[A-Za-z0-9_-]+$/;
+const episodesRootDir = path.resolve(process.cwd(), 'episodes');
+const assetsRootDir = path.resolve(process.cwd(), 'assets');
+
+let cachedFfmpegBinary: string | null | undefined;
+
+function probeFfmpegBinary(candidate: string): boolean {
+  try {
+    const res = spawnSync(candidate, ['-version'], {
+      stdio: 'ignore',
+      timeout: 5000,
+      windowsHide: true,
+    });
+    return !res.error && res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveFfmpegBinary(): string | null {
+  if (cachedFfmpegBinary !== undefined) {
+    return cachedFfmpegBinary;
+  }
+
+  const candidates: string[] = [];
+  const envPath = process.env.FFMPEG_PATH?.trim();
+  if (envPath) {
+    candidates.push(envPath);
+  }
+  candidates.push('ffmpeg');
+  if (process.platform === 'win32') {
+    candidates.push('ffmpeg.exe');
+  }
+  if (fs.existsSync('/usr/bin/ffmpeg')) {
+    candidates.push('/usr/bin/ffmpeg');
+  }
+
+  for (const candidate of candidates) {
+    if (probeFfmpegBinary(candidate)) {
+      cachedFfmpegBinary = candidate;
+      return cachedFfmpegBinary;
+    }
+  }
+
+  cachedFfmpegBinary = null;
+  return null;
+}
+
+function isValidEpisodeId(id: string): boolean {
+  return EPISODE_ID_RE.test(id);
+}
+
+function getEpisodeManifestPath(id: string): string {
+  return path.join(episodesRootDir, id, 'episode.json');
+}
+
+function loadEpisodeManifest(id: string): EpisodeManifest | null {
+  if (!isValidEpisodeId(id)) return null;
+  const manifestPath = getEpisodeManifestPath(id);
+  if (!fs.existsSync(manifestPath)) return null;
+  const raw = fs.readFileSync(manifestPath, 'utf-8');
+  return JSON.parse(raw) as EpisodeManifest;
+}
+
+function isValidEpisodeManifestBody(body: unknown): body is EpisodeManifest {
+  if (!body || typeof body !== 'object') return false;
+  const obj = body as Record<string, unknown>;
+  const spec = obj.spec as Record<string, unknown> | undefined;
+  if (!spec || typeof spec !== 'object') return false;
+  if (
+    typeof spec.width !== 'number' ||
+    !Number.isFinite(spec.width) ||
+    spec.width <= 0 ||
+    typeof spec.height !== 'number' ||
+    !Number.isFinite(spec.height) ||
+    spec.height <= 0 ||
+    typeof spec.fps !== 'number' ||
+    !Number.isFinite(spec.fps) ||
+    spec.fps <= 0
+  ) {
+    return false;
+  }
+  if (!Array.isArray(obj.scenes) || obj.scenes.length === 0) return false;
+  for (const scene of obj.scenes) {
+    if (!scene || typeof scene !== 'object') return false;
+    const s = scene as Record<string, unknown>;
+    if (
+      typeof s.id !== 'string' ||
+      !s.id.trim() ||
+      typeof s.kind !== 'string' ||
+      typeof s.durationFrames !== 'number' ||
+      !Number.isFinite(s.durationFrames) ||
+      s.durationFrames <= 0
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 interface ExportSession {
   dir: string;
   totalFrames: number;
   width: number;
   height: number;
+  fps: number;
   track: string;
+  episodeId?: string;
   receivedFrames: number;
   mp4Path?: string;
   createdAt: number;
@@ -41,12 +145,171 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '80mb' }));
 
+  // Serve dynamic episode assets and shared hook assets in both dev & production modes
+  app.use('/episodes', express.static(episodesRootDir));
+  app.use('/assets', express.static(assetsRootDir));
+
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, ffmpeg: fs.existsSync('/usr/bin/ffmpeg') });
+    const ffmpegBin = resolveFfmpegBinary();
+    res.json({ ok: true, ffmpeg: Boolean(ffmpegBin), ffmpegPath: ffmpegBin ?? null });
   });
 
-  // Download synthesized stereo WAV audio track directly (?track=1120_v2, 1120, or 1117)
+  // List all dynamic episodes from episodes/*/episode.json (newest date first)
+  app.get('/api/episodes', (_req, res) => {
+    try {
+      if (!fs.existsSync(episodesRootDir)) {
+        res.json({ episodes: [] });
+        return;
+      }
+
+      const entries = fs.readdirSync(episodesRootDir, { withFileTypes: true });
+      const episodes: EpisodeListItem[] = [];
+
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !isValidEpisodeId(entry.name)) continue;
+        const manifestPath = getEpisodeManifestPath(entry.name);
+        if (!fs.existsSync(manifestPath)) continue;
+
+        try {
+          const raw = fs.readFileSync(manifestPath, 'utf-8');
+          const episode = JSON.parse(raw) as EpisodeManifest;
+          if (!isValidEpisodeManifestBody(episode)) continue;
+
+          const tl = compileEpisodeTimeline(episode);
+          const hookScene = episode.scenes.find((s) => s.kind === 'hook_live_video');
+
+          episodes.push({
+            id: episode.id || entry.name,
+            date: episode.date || entry.name,
+            title: episode.title || entry.name,
+            seriesTitle: episode.seriesTitle || '',
+            description: episode.description || '',
+            totalFrames: tl.totalFrames,
+            durationSec: tl.durationSec,
+            fps: tl.fps,
+            bpm: tl.bpm,
+            width: tl.width,
+            height: tl.height,
+            shotCount: tl.shots.length,
+            hookId: hookScene?.kind === 'hook_live_video' ? hookScene.data.hookId : undefined,
+            posterSrc: hookScene?.kind === 'hook_live_video' ? hookScene.data.posterSrc : undefined,
+          });
+        } catch {
+          // Skip malformed episode.json files without failing the list endpoint
+        }
+      }
+
+      episodes.sort((a, b) => {
+        const byDate = b.date.localeCompare(a.date);
+        return byDate !== 0 ? byDate : b.id.localeCompare(a.id);
+      });
+
+      res.json({ episodes });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to list episodes';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Load a single dynamic episode manifest by id
+  app.get('/api/episodes/:id', (req, res) => {
+    const id = String(req.params.id || '');
+    if (!isValidEpisodeId(id)) {
+      res.status(400).json({ error: 'Invalid episode id' });
+      return;
+    }
+
+    try {
+      const episode = loadEpisodeManifest(id);
+      if (!episode) {
+        res.status(404).json({ error: `Episode "${id}" not found` });
+        return;
+      }
+      res.json(episode);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to read episode';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Save/update a dynamic episode manifest by id
+  app.post('/api/episodes/:id', (req, res) => {
+    const id = String(req.params.id || '');
+    if (!isValidEpisodeId(id)) {
+      res.status(400).json({ error: 'Invalid episode id' });
+      return;
+    }
+
+    if (!isValidEpisodeManifestBody(req.body)) {
+      res.status(400).json({ error: 'Invalid EpisodeManifest payload' });
+      return;
+    }
+
+    try {
+      const targetDir = path.join(episodesRootDir, id);
+      fs.mkdirSync(targetDir, { recursive: true });
+      const manifest: EpisodeManifest = {
+        ...req.body,
+        id,
+      };
+      fs.writeFileSync(
+        path.join(targetDir, 'episode.json'),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+        'utf-8'
+      );
+      res.json({ ok: true, id });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save episode';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Read shared hook video library manifest
+  app.get('/api/hooks', (_req, res) => {
+    try {
+      const hooksManifestPath = path.join(assetsRootDir, 'hooks', 'manifest.json');
+      if (!fs.existsSync(hooksManifestPath)) {
+        res.status(404).json({ error: 'Hooks manifest not found' });
+        return;
+      }
+      const raw = fs.readFileSync(hooksManifestPath, 'utf-8');
+      res.json(JSON.parse(raw));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load hooks manifest';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Download synthesized stereo WAV audio track directly (?episodeId=... or ?track=1120_v2|1120|1117)
   app.get('/api/audio/bgm.wav', (req, res) => {
+    const episodeId = typeof req.query.episodeId === 'string' ? req.query.episodeId.trim() : '';
+    if (episodeId) {
+      if (!isValidEpisodeId(episodeId)) {
+        res.status(400).json({ error: 'Invalid episodeId' });
+        return;
+      }
+      try {
+        const episode = loadEpisodeManifest(episodeId);
+        if (!episode) {
+          res.status(404).json({ error: `Episode "${episodeId}" not found` });
+          return;
+        }
+        const pcm = synthesizeEpisodeAudioPcm(episode, 44100);
+        const wav = encodeStereoWav(pcm);
+        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${episodeId}_editorial_bgm.wav"`
+        );
+        res.send(Buffer.from(wav));
+        return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to synthesize episode audio';
+        res.status(500).json({ error: message });
+        return;
+      }
+    }
+
     const track = String(req.query.track || '1120_v2');
     const pcm =
       track === '1120_v2'
@@ -72,8 +335,30 @@ async function startServer() {
       totalFrames = 900,
       width = 1080,
       height = 1920,
+      fps = 30,
       track = '1120',
+      episodeId,
     } = req.body ?? {};
+
+    let validatedEpisodeId: string | undefined;
+    let resolvedFps = Number(fps) > 0 ? Number(fps) : 30;
+    if (typeof episodeId === 'string' && episodeId.trim()) {
+      const cleanId = episodeId.trim();
+      if (!isValidEpisodeId(cleanId)) {
+        res.status(400).json({ error: 'Invalid episodeId' });
+        return;
+      }
+      const episode = loadEpisodeManifest(cleanId);
+      if (!episode) {
+        res.status(404).json({ error: `Episode "${cleanId}" not found` });
+        return;
+      }
+      validatedEpisodeId = cleanId;
+      if (!req.body?.fps && episode.spec?.fps > 0) {
+        resolvedFps = episode.spec.fps;
+      }
+    }
+
     const sessionId = crypto.randomUUID();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `quantreel-${sessionId}-`));
 
@@ -82,7 +367,9 @@ async function startServer() {
       totalFrames: Number(totalFrames),
       width: Number(width),
       height: Number(height),
+      fps: resolvedFps,
       track: String(track),
+      episodeId: validatedEpisodeId,
       receivedFrames: 0,
       createdAt: Date.now(),
     });
@@ -118,23 +405,41 @@ async function startServer() {
       return;
     }
 
+    const ffmpegBin = resolveFfmpegBinary();
+    if (!ffmpegBin) {
+      res.status(503).json({
+        error: 'FFmpeg binary not available on server; please use browser WebCodecs fallback.',
+      });
+      return;
+    }
+
     try {
       const wavPath = path.join(sess.dir, 'bgm.wav');
       const mp4Path = path.join(sess.dir, 'output.mp4');
 
-      const pcm =
-        sess.track === '1120_v2'
-          ? synthesizeIntelV2TrackPcm(44100)
-          : sess.track === '1120'
-            ? synthesizeIntelTrackPcm(44100)
-            : synthesizeTrackPcm(44100);
+      let pcm;
+      if (sess.episodeId) {
+        const episode = loadEpisodeManifest(sess.episodeId);
+        if (!episode) {
+          res.status(404).json({ error: `Episode "${sess.episodeId}" not found` });
+          return;
+        }
+        pcm = synthesizeEpisodeAudioPcm(episode, 44100);
+      } else {
+        pcm =
+          sess.track === '1120_v2'
+            ? synthesizeIntelV2TrackPcm(44100)
+            : sess.track === '1120'
+              ? synthesizeIntelTrackPcm(44100)
+              : synthesizeTrackPcm(44100);
+      }
       const wav = encodeStereoWav(pcm);
       fs.writeFileSync(wavPath, Buffer.from(wav));
 
-      await execFileAsync('/usr/bin/ffmpeg', [
+      await execFileAsync(ffmpegBin, [
         '-y',
         '-framerate',
-        '30',
+        String(sess.fps || 30),
         '-i',
         path.join(sess.dir, 'frame_%04d.jpg'),
         '-i',
@@ -179,8 +484,9 @@ async function startServer() {
       res.status(404).json({ error: 'Rendered MP4 not found' });
       return;
     }
-    const downloadName =
-      sess.track === '1120_v2'
+    const downloadName = sess.episodeId
+      ? `${sess.episodeId}_morning_intel_final.mp4`
+      : sess.track === '1120_v2'
         ? '1120_v2_morning_intel_final.mp4'
         : sess.track === '1120'
           ? '1120_morning_intel_final.mp4'

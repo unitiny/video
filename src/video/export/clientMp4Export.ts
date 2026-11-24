@@ -2,10 +2,20 @@ import { ArrayBufferTarget, Muxer } from 'mp4-muxer';
 import { encodeStereoWav, synthesizeTrackPcm, type StereoPcm } from '../audio/synthAudio';
 import { synthesizeIntelTrackPcm } from '../intel/synthIntelAudio';
 import { synthesizeIntelV2TrackPcm } from '../intelV2/synthIntelV2Audio';
+import type { EpisodeManifest } from '../engine/schema';
+import { synthesizeEpisodeAudioPcm } from '../engine/audioSynth';
 
 export type ExportTrackKey = '1120_v2' | '1120' | '1117';
 
-export function getExportFileName(trackKey: ExportTrackKey, ext: 'mp4' | 'webm' | 'wav' = 'mp4'): string {
+export function getExportFileName(
+  trackKey: ExportTrackKey,
+  ext: 'mp4' | 'webm' | 'wav' = 'mp4',
+  episodeId?: string
+): string {
+  if (episodeId) {
+    if (ext === 'wav') return `${episodeId}_editorial_bgm.wav`;
+    return `${episodeId}_morning_intel_final.${ext}`;
+  }
   if (ext === 'wav') {
     if (trackKey === '1120_v2') return '1120_v2_112bpm_editorial.wav';
     if (trackKey === '1120') return '1120_108bpm_editorial_mix.wav';
@@ -16,18 +26,26 @@ export function getExportFileName(trackKey: ExportTrackKey, ext: 'mp4' | 'webm' 
   return `1117_close_fund_flow_replica.${ext}`;
 }
 
-export function synthesizeTrackForRate(trackKey: ExportTrackKey, sampleRate: number): StereoPcm {
+export function synthesizeTrackForRate(
+  trackKey: ExportTrackKey,
+  sampleRate: number,
+  episode?: EpisodeManifest
+): StereoPcm {
+  if (episode) return synthesizeEpisodeAudioPcm(episode, sampleRate);
   if (trackKey === '1120_v2') return synthesizeIntelV2TrackPcm(sampleRate);
   if (trackKey === '1120') return synthesizeIntelTrackPcm(sampleRate);
   return synthesizeTrackPcm(sampleRate);
 }
 
-export function buildTrackWavBlob(trackKey: ExportTrackKey): { blob: Blob; filename: string } {
-  const pcm = synthesizeTrackForRate(trackKey, 44100);
+export function buildTrackWavBlob(
+  trackKey: ExportTrackKey,
+  episode?: EpisodeManifest
+): { blob: Blob; filename: string } {
+  const pcm = synthesizeTrackForRate(trackKey, 44100, episode);
   const wav = encodeStereoWav(pcm);
   return {
     blob: new Blob([wav.buffer as ArrayBuffer], { type: 'audio/wav' }),
-    filename: getExportFileName(trackKey, 'wav'),
+    filename: getExportFileName(trackKey, 'wav', episode?.id),
   };
 }
 
@@ -58,6 +76,7 @@ export interface ClientMp4ExportParams {
   width: number;
   height: number;
   trackKey: ExportTrackKey;
+  episode?: EpisodeManifest;
   renderFrame: (frameIndex: number, outCanvas: HTMLCanvasElement, outCtx: CanvasRenderingContext2D) => void;
   onProgress: (renderedFrames: number) => void;
   onPhaseChange?: (phaseLabel: string) => void;
@@ -148,7 +167,7 @@ async function pickSupportedAudioConfig(): Promise<{
 async function exportWithMediaRecorderFallback(
   params: ClientMp4ExportParams
 ): Promise<ClientMp4ExportResult> {
-  const { totalFrames, fps, width, height, trackKey, renderFrame, onProgress, onPhaseChange } =
+  const { totalFrames, fps, width, height, trackKey, episode, renderFrame, onProgress, onPhaseChange } =
     params;
 
   const outCanvas = document.createElement('canvas');
@@ -187,7 +206,7 @@ async function exportWithMediaRecorderFallback(
       if (audioCtx.state === 'suspended') {
         await audioCtx.resume();
       }
-      const pcm = synthesizeTrackForRate(trackKey, audioCtx.sampleRate);
+      const pcm = synthesizeTrackForRate(trackKey, audioCtx.sampleRate, episode);
       const buf = audioCtx.createBuffer(2, pcm.left.length, audioCtx.sampleRate);
       buf.getChannelData(0).set(pcm.left);
       buf.getChannelData(1).set(pcm.right);
@@ -241,7 +260,7 @@ async function exportWithMediaRecorderFallback(
   return {
     blob,
     sizeBytes: blob.size,
-    filename: getExportFileName(trackKey, ext),
+    filename: getExportFileName(trackKey, ext, episode?.id),
     engineLabel: `浏览器实时编码 (${ext.toUpperCase()})`,
   };
 }
@@ -249,7 +268,7 @@ async function exportWithMediaRecorderFallback(
 export async function exportClientMp4(
   params: ClientMp4ExportParams
 ): Promise<ClientMp4ExportResult> {
-  const { totalFrames, fps, width, height, trackKey, renderFrame, onProgress, onPhaseChange } =
+  const { totalFrames, fps, width, height, trackKey, episode, renderFrame, onProgress, onPhaseChange } =
     params;
 
   const videoConfig = await pickSupportedVideoConfig(width, height, fps);
@@ -343,7 +362,7 @@ export async function exportClientMp4(
   if (audioEncoder && audioChoice) {
     onPhaseChange?.('正在混流立体声音轨并封装 MP4...');
     const sampleRate = audioChoice.encoderConfig.sampleRate;
-    const pcm = synthesizeTrackForRate(trackKey, sampleRate);
+    const pcm = synthesizeTrackForRate(trackKey, sampleRate, episode);
     const totalSamples = Math.min(pcm.left.length, Math.round((totalFrames / fps) * sampleRate));
     const chunkSamples = 2048;
 
@@ -381,7 +400,7 @@ export async function exportClientMp4(
   return {
     blob,
     sizeBytes: blob.size,
-    filename: getExportFileName(trackKey, 'mp4'),
+    filename: getExportFileName(trackKey, 'mp4', episode?.id),
     engineLabel: audioChoice
       ? `浏览器 WebCodecs (H.264 + ${audioChoice.muxerCodec.toUpperCase()})`
       : '浏览器 WebCodecs (H.264)',

@@ -20,10 +20,18 @@ export default defineConfig(() => {
             return;
           }
           const distDir = path.resolve(__dirname, 'dist');
-          const srcAssets = path.resolve(__dirname, 'src/assets');
-          const distAssets = path.resolve(distDir, 'src/assets');
-          if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
-            fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
+          if (!fs.existsSync(distDir)) {
+            return;
+          }
+          const copyTargets = [
+            { src: path.resolve(__dirname, 'src/assets'), dest: path.resolve(distDir, 'src/assets') },
+            { src: path.resolve(__dirname, 'episodes'), dest: path.resolve(distDir, 'episodes') },
+            { src: path.resolve(__dirname, 'assets'), dest: path.resolve(distDir, 'assets') },
+          ];
+          for (const target of copyTargets) {
+            if (fs.existsSync(target.src)) {
+              fs.cpSync(target.src, target.dest, {recursive: true, force: true});
+            }
           }
         },
       },

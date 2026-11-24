@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "defaultHookId": "watch_45749",
+  "hooks": [
+    {
+      "id": "watch_45749",
+      "label": "商务急电抬腕看表（紧迫决战）",
+      "description": "穿深色西装商务人士边接紧急电话边利落抬腕看表，贴合盘前节点紧迫感，无夸张感叹表情。",
+      "moods": ["urgent", "keyday", "business", "caution"],
+      "videoSrc": "/src/assets/videos/real_keyday_watch_45749.mp4",
+      "posterSrc": "/src/assets/images/real_keyday_watch_poster.jpg",
+      "sample": {
+        "sampleCount": 42,
+        "minSec": 2.05,
+        "maxSec": 4.65,
+        "outW": 480,
+        "outH": 854,
+        "cropCenterRatio": 0.27
+      },
+      "forbiddenZones": [
+        { "label": "人脸通话区", "yMin": 190, "yMax": 720 },
+        { "label": "抬腕看表动作区", "yMin": 1030, "yMax": 1280 }
+      ],
+      "danmakuSlots": [
+        { "y": 128, "fontSize": 52, "defaultColor": "#FBBF24", "offset": 120, "speed": 4.8 },
+        { "y": 806, "fontSize": 52, "defaultColor": "#F87171", "offset": 160, "speed": 5.2 },
+        { "y": 892, "fontSize": 52, "defaultColor": "#38BDF8", "offset": 95, "speed": 5.0 },
+        { "y": 978, "fontSize": 52, "defaultColor": "#34D399", "offset": 195, "speed": 4.6 },
+        { "y": 1802, "fontSize": 54, "defaultColor": "#FEF3C7", "offset": 88, "speed": 5.1 }
+      ]
+    }
+  ]
+}

@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
   Pause,
   Play,
+  RefreshCw,
   RotateCcw,
   Volume2,
   VolumeX,
@@ -37,8 +38,46 @@ import {
 } from '../video/intelV2/intelV2Timeline';
 import { renderIntelV2VideoFrame } from '../video/intelV2/renderIntelV2Frame';
 import { synthesizeIntelV2TrackPcm } from '../video/intelV2/synthIntelV2Audio';
+import type {
+  EpisodeListItem,
+  EpisodeManifest,
+  LoadedEpisodeAssets,
+} from '../video/engine/schema';
+import {
+  compileEpisodeTimeline,
+  getCompiledShotAtFrame,
+  type CompiledShot,
+} from '../video/engine/timeline';
+import { synthesizeEpisodeAudioPcm } from '../video/engine/audioSynth';
+import { renderEpisodeFrame } from '../video/engine/scenes';
 
-export type StudioProjectMode = '1120_v2' | '1120_intel' | '1117_close' | 'morning_brief';
+export type StudioProjectMode =
+  | 'episode'
+  | '1120_v2'
+  | '1120_intel'
+  | '1117_close'
+  | 'morning_brief';
+
+const EMPTY_EPISODE_ASSETS: LoadedEpisodeAssets = {
+  imagesBySrc: {},
+  videoFramesBySrc: {},
+  videosBySrc: {},
+};
+
+function getShotPreviewAsset(shot: CompiledShot): string | null {
+  const { scene } = shot;
+  if (scene.kind === 'hook_live_video') {
+    return scene.data.posterSrc || null;
+  }
+  if (
+    scene.kind === 'event_flow_funnel' ||
+    scene.kind === 'event_dual_spotlight' ||
+    scene.kind === 'event_timeline'
+  ) {
+    return scene.data.imageSrc || null;
+  }
+  return null;
+}
 
 interface VideoPlayerWorkspaceProps {
   projectMode: StudioProjectMode;
@@ -47,6 +86,13 @@ interface VideoPlayerWorkspaceProps {
   onFrameChange: (frame: number) => void;
   images: LoadedVideoImages;
   intelImages: LoadedIntelImages;
+  episodes?: EpisodeListItem[];
+  episodesLoading?: boolean;
+  selectedEpisodeId?: string;
+  onSelectEpisode?: (episodeId: string) => void;
+  onRefreshEpisodes?: () => void;
+  activeEpisode?: EpisodeManifest | null;
+  episodeAssets?: LoadedEpisodeAssets;
 }
 
 export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
@@ -56,6 +102,13 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
   onFrameChange,
   images,
   intelImages,
+  episodes = [],
+  episodesLoading = false,
+  selectedEpisodeId = '',
+  onSelectEpisode,
+  onRefreshEpisodes,
+  activeEpisode = null,
+  episodeAssets = EMPTY_EPISODE_ASSETS,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -69,27 +122,83 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
   const frameRef = useRef(currentFrame);
   frameRef.current = currentFrame;
 
+  const compiledTimeline = useMemo(
+    () => (activeEpisode ? compileEpisodeTimeline(activeEpisode) : null),
+    [activeEpisode]
+  );
+
+  const isEpisodeMode = projectMode === 'episode' && Boolean(activeEpisode && compiledTimeline);
   const isV2Mode = projectMode === '1120_v2';
   const isV1IntelMode = projectMode === '1120_intel';
-  const isPortrait916 = isV2Mode || isV1IntelMode;
-  const spec = isV2Mode ? INTEL_V2_SPEC : isV1IntelMode ? INTEL_VIDEO_SPEC : VIDEO_SPEC;
+  const isPortrait916 = projectMode === 'episode' || isV2Mode || isV1IntelMode;
+
+  const spec =
+    isEpisodeMode && compiledTimeline
+      ? {
+          width: compiledTimeline.width,
+          height: compiledTimeline.height,
+          fps: compiledTimeline.fps,
+          totalFrames: compiledTimeline.totalFrames,
+          durationSec: compiledTimeline.durationSec,
+          bpm: compiledTimeline.bpm,
+        }
+      : projectMode === 'episode' || isV2Mode
+        ? INTEL_V2_SPEC
+        : isV1IntelMode
+          ? INTEL_VIDEO_SPEC
+          : VIDEO_SPEC;
+
   const totalFrames = spec.totalFrames;
   const durationSec = spec.durationSec;
   const bpm = spec.bpm;
 
   const safeFrame = Math.max(0, Math.min(totalFrames - 1, currentFrame));
   const currentTimeSec = (safeFrame / spec.fps).toFixed(2);
-  const isBreathPause = !isPortrait916 && Number(currentTimeSec) >= 2.0 && Number(currentTimeSec) <= 3.0;
+  const isBreathPause =
+    !isPortrait916 && Number(currentTimeSec) >= 2.0 && Number(currentTimeSec) <= 3.0;
 
-  const cutMarkers = isV2Mode
-    ? INTEL_V2_CUT_FRAMES
-    : isV1IntelMode
-      ? INTEL_CUT_FRAMES
-      : HARD_CUT_FRAMES;
+  const cutMarkers =
+    isEpisodeMode && compiledTimeline
+      ? compiledTimeline.cutFrames
+      : isV2Mode
+        ? INTEL_V2_CUT_FRAMES
+        : isV1IntelMode
+          ? INTEL_CUT_FRAMES
+          : HARD_CUT_FRAMES;
+
+  const activeCompiledShot =
+    isEpisodeMode && compiledTimeline ? getCompiledShotAtFrame(compiledTimeline, safeFrame) : null;
   const activeV2Shot = isV2Mode ? getIntelV2ShotAtFrame(safeFrame) : null;
   const activeIntelShot = isV1IntelMode ? getIntelShotAtFrame(safeFrame) : null;
   const activeLegacyShot = !isPortrait916 ? getShotAtFrame(safeFrame) : null;
   const { clockText } = getClockAndMinuteAtFrame(safeFrame);
+
+  const episodeVisualCards = useMemo(() => {
+    if (!compiledTimeline) return [];
+    const cards: Array<{ id: string; label: string; src: string; jump: number }> = [];
+    for (const shot of compiledTimeline.shots) {
+      const src = getShotPreviewAsset(shot);
+      if (src) {
+        cards.push({
+          id: shot.id,
+          label: `${String(shot.index).padStart(2, '0')} ${shot.title}`,
+          src,
+          jump: shot.startFrame + Math.min(24, Math.floor(shot.durationFrames / 3)),
+        });
+      }
+    }
+    return cards;
+  }, [compiledTimeline]);
+
+  // Clear cached dynamic episode audio whenever the activeEpisode manifest object updates
+  useEffect(() => {
+    for (const key of Object.keys(audioBufferCacheRef.current)) {
+      if (key.startsWith('episode:')) {
+        delete audioBufferCacheRef.current[key];
+      }
+    }
+    setIsPlaying(false);
+  }, [activeEpisode]);
 
   // Render deterministic Canvas2D frame
   useEffect(() => {
@@ -98,7 +207,21 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    if (isV2Mode) {
+    if (isEpisodeMode && activeEpisode) {
+      renderEpisodeFrame(ctx, safeFrame, activeEpisode, episodeAssets);
+    } else if (projectMode === 'episode') {
+      ctx.fillStyle = '#101216';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#9CA3AF';
+      ctx.font = '600 32px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(
+        episodesLoading ? '正在加载每日剧集...' : '暂无可用动态剧集',
+        canvas.width / 2,
+        canvas.height / 2
+      );
+    } else if (isV2Mode) {
       renderIntelV2VideoFrame(ctx, safeFrame, intelImages);
     } else if (isV1IntelMode) {
       renderIntelVideoFrame(ctx, safeFrame, intelImages);
@@ -106,7 +229,18 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
       const legacyId = projectMode === 'morning_brief' ? 'morning_brief' : '1117_close';
       renderVideoFrame(ctx, safeFrame, PROJECT_TEMPLATES[legacyId], images);
     }
-  }, [safeFrame, projectMode, isV2Mode, isV1IntelMode, images, intelImages]);
+  }, [
+    safeFrame,
+    projectMode,
+    isEpisodeMode,
+    activeEpisode,
+    episodeAssets,
+    episodesLoading,
+    isV2Mode,
+    isV1IntelMode,
+    images,
+    intelImages,
+  ]);
 
   const ensureAudioBuffer = async (): Promise<{ ctx: AudioContext; buf: AudioBuffer } | null> => {
     try {
@@ -121,13 +255,23 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
       if (ctx.state === 'suspended') {
         await ctx.resume();
       }
-      const cacheKey = isV2Mode ? '1120_v2' : isV1IntelMode ? '1120_intel' : '1117_legacy';
+      const cacheKey =
+        isEpisodeMode && activeEpisode && compiledTimeline
+          ? `episode:${activeEpisode.id}:${compiledTimeline.totalFrames}`
+          : isV2Mode
+            ? '1120_v2'
+            : isV1IntelMode
+              ? '1120_intel'
+              : '1117_legacy';
       if (!audioBufferCacheRef.current[cacheKey]) {
-        const pcm = isV2Mode
-          ? synthesizeIntelV2TrackPcm(ctx.sampleRate, INTEL_V2_SPEC.durationSec)
-          : isV1IntelMode
-            ? synthesizeIntelTrackPcm(ctx.sampleRate, INTEL_VIDEO_SPEC.durationSec)
-            : synthesizeTrackPcm(ctx.sampleRate, VIDEO_SPEC.durationSec);
+        const pcm =
+          isEpisodeMode && activeEpisode
+            ? synthesizeEpisodeAudioPcm(activeEpisode, ctx.sampleRate)
+            : isV2Mode
+              ? synthesizeIntelV2TrackPcm(ctx.sampleRate, INTEL_V2_SPEC.durationSec)
+              : isV1IntelMode
+                ? synthesizeIntelTrackPcm(ctx.sampleRate, INTEL_VIDEO_SPEC.durationSec)
+                : synthesizeTrackPcm(ctx.sampleRate, VIDEO_SPEC.durationSec);
         const buf = ctx.createBuffer(2, pcm.left.length, ctx.sampleRate);
         buf.getChannelData(0).set(pcm.left);
         buf.getChannelData(1).set(pcm.right);
@@ -210,7 +354,7 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
       cancelAnimationFrame(rafId);
       stopAudio();
     };
-  }, [isPlaying, totalFrames]);
+  }, [isPlaying, totalFrames, spec.fps]);
 
   const handleTogglePlay = () => {
     if (!isPlaying && safeFrame >= totalFrames - 1) {
@@ -230,77 +374,140 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
       {/* Left / Center Stage */}
       <section className="lg:col-span-7 bg-white border border-neutral-200 rounded-xl p-6 flex flex-col items-center">
         {/* Mode Switcher + Video Spec Metadata */}
-        <div className="w-full flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-neutral-200">
-          <div className="flex items-center gap-1 p-1 bg-neutral-100 rounded-lg" role="group" aria-label="选择视频作品">
-            <button
-              type="button"
-              onClick={() => {
-                setIsPlaying(false);
-                onProjectModeChange('1120_v2');
-              }}
-              className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                projectMode === '1120_v2'
-                  ? 'bg-white text-neutral-900 shadow-sm'
-                  : 'text-neutral-600 hover:text-neutral-900'
-              }`}
+        <div className="w-full space-y-3 pb-4 border-b border-neutral-200">
+          <div className="w-full flex flex-wrap items-center justify-between gap-4">
+            <div
+              className="flex flex-wrap items-center gap-1 p-1 bg-neutral-100 rounded-lg"
+              role="group"
+              aria-label="选择视频作品"
             >
-              11.20 v2 精修爆款
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsPlaying(false);
-                onProjectModeChange('1120_intel');
-              }}
-              className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                projectMode === '1120_intel'
-                  ? 'bg-white text-neutral-900 shadow-sm'
-                  : 'text-neutral-600 hover:text-neutral-900'
-              }`}
-            >
-              11.20 v1 存档
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsPlaying(false);
-                onProjectModeChange('1117_close');
-              }}
-              className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                projectMode === '1117_close'
-                  ? 'bg-white text-neutral-900 shadow-sm'
-                  : 'text-neutral-600 hover:text-neutral-900'
-              }`}
-            >
-              1117收盘复刻
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsPlaying(false);
-                onProjectModeChange('morning_brief');
-              }}
-              className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                projectMode === 'morning_brief'
-                  ? 'bg-white text-neutral-900 shadow-sm'
-                  : 'text-neutral-600 hover:text-neutral-900'
-              }`}
-            >
-              1119早报
-            </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPlaying(false);
+                  onProjectModeChange('episode');
+                }}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  projectMode === 'episode'
+                    ? 'bg-white text-neutral-900 shadow-sm'
+                    : 'text-neutral-600 hover:text-neutral-900'
+                }`}
+              >
+                每日剧集
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPlaying(false);
+                  onProjectModeChange('1120_v2');
+                }}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  projectMode === '1120_v2'
+                    ? 'bg-white text-neutral-900 shadow-sm'
+                    : 'text-neutral-600 hover:text-neutral-900'
+                }`}
+              >
+                11.20 v2 精修爆款
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPlaying(false);
+                  onProjectModeChange('1120_intel');
+                }}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  projectMode === '1120_intel'
+                    ? 'bg-white text-neutral-900 shadow-sm'
+                    : 'text-neutral-600 hover:text-neutral-900'
+                }`}
+              >
+                11.20 v1 存档
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPlaying(false);
+                  onProjectModeChange('1117_close');
+                }}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  projectMode === '1117_close'
+                    ? 'bg-white text-neutral-900 shadow-sm'
+                    : 'text-neutral-600 hover:text-neutral-900'
+                }`}
+              >
+                1117收盘复刻
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPlaying(false);
+                  onProjectModeChange('morning_brief');
+                }}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  projectMode === 'morning_brief'
+                    ? 'bg-white text-neutral-900 shadow-sm'
+                    : 'text-neutral-600 hover:text-neutral-900'
+                }`}
+              >
+                1119早报
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs text-neutral-500 font-mono-num">
+              <span>
+                {spec.width} × {spec.height}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>{spec.fps} fps</span>
+              <span aria-hidden="true">·</span>
+              <span>{totalFrames} 帧</span>
+              <span aria-hidden="true">·</span>
+              <span>{bpm} BPM</span>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-neutral-500 font-mono-num">
-            <span>
-              {spec.width} × {spec.height}
-            </span>
-            <span aria-hidden="true">·</span>
-            <span>30 fps</span>
-            <span aria-hidden="true">·</span>
-            <span>{totalFrames} 帧</span>
-            <span aria-hidden="true">·</span>
-            <span>{bpm} BPM</span>
-          </div>
+          {projectMode === 'episode' && (
+            <div className="w-full flex flex-wrap items-center gap-2 pt-1">
+              <label htmlFor="episode-selector" className="text-xs font-medium text-neutral-500 shrink-0">
+                当前剧集
+              </label>
+              <select
+                id="episode-selector"
+                aria-label="选择每日剧集"
+                value={selectedEpisodeId}
+                disabled={episodesLoading || episodes.length === 0}
+                onChange={(e) => {
+                  setIsPlaying(false);
+                  onSelectEpisode?.(e.target.value);
+                }}
+                className="flex-1 min-w-[200px] px-2.5 py-1.5 text-xs font-medium text-neutral-900 bg-neutral-50 border border-neutral-200 rounded-lg focus:outline-none focus:border-[#C8342A]"
+              >
+                {episodes.length === 0 ? (
+                  <option value="">
+                    {episodesLoading ? '正在加载剧集列表...' : '暂无可用剧集（可切回旧版）'}
+                  </option>
+                ) : (
+                  episodes.map((ep) => (
+                    <option key={ep.id} value={ep.id}>
+                      {ep.date} · {ep.title} ({ep.durationSec.toFixed(1)}s)
+                    </option>
+                  ))
+                )}
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPlaying(false);
+                  onRefreshEpisodes?.();
+                }}
+                disabled={episodesLoading}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 text-xs font-medium whitespace-nowrap shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${episodesLoading ? 'animate-spin' : ''}`} />
+                <span>刷新列表</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Phone Frame Canvas Viewport */}
@@ -349,7 +556,7 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
               />
               <div className="relative h-4 mt-1">
                 {cutMarkers.map((cutFrame) => {
-                  const pct = (cutFrame / (totalFrames - 1)) * 100;
+                  const pct = (cutFrame / Math.max(1, totalFrames - 1)) * 100;
                   return (
                     <button
                       key={cutFrame}
@@ -373,17 +580,20 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
               <button
                 type="button"
                 onClick={handleTogglePlay}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#C8342A] hover:bg-[#b02a21] text-white text-sm font-medium transition-colors whitespace-nowrap shrink-0"
+                disabled={projectMode === 'episode' && !isEpisodeMode}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#C8342A] hover:bg-[#b02a21] disabled:opacity-60 text-white text-sm font-medium transition-colors whitespace-nowrap shrink-0"
               >
                 {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                 <span>
                   {isPlaying
                     ? '暂停播放'
-                    : isV2Mode
-                      ? '播放 v2 精修版'
-                      : isV1IntelMode
-                        ? '播放 v1 存档版'
-                        : '播放复刻成品'}
+                    : isEpisodeMode
+                      ? '播放当前剧集'
+                      : isV2Mode
+                        ? '播放 v2 精修版'
+                        : isV1IntelMode
+                          ? '播放 v1 存档版'
+                          : '播放复刻成品'}
                 </span>
               </button>
 
@@ -431,11 +641,13 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
               <span>
                 {isMuted
                   ? '已静音'
-                  : isV2Mode
-                    ? '112 BPM 动感音效'
-                    : isV1IntelMode
-                      ? '108 BPM 动感剪辑'
-                      : '129.2 BPM 音轨'}
+                  : isEpisodeMode
+                    ? `${bpm} BPM 动态音效`
+                    : isV2Mode
+                      ? '112 BPM 动感音效'
+                      : isV1IntelMode
+                        ? '108 BPM 动感剪辑'
+                        : '129.2 BPM 音轨'}
               </span>
             </button>
           </div>
@@ -444,7 +656,133 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
 
       {/* Right Column: Active Scene Inspector & Quick Jump */}
       <aside className="lg:col-span-5 space-y-6">
-        {isV2Mode && activeV2Shot ? (
+        {isEpisodeMode && activeEpisode && compiledTimeline && activeCompiledShot ? (
+          <>
+            <section className="bg-white border border-neutral-200 rounded-xl p-6 space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs text-neutral-500 font-mono-num">
+                    动态剧集段落 {activeCompiledShot.index} / {compiledTimeline.shots.length} · 帧{' '}
+                    {activeCompiledShot.startFrame}–{activeCompiledShot.endFrame}
+                  </div>
+                  <h2 className="text-lg font-bold text-neutral-900 mt-1">
+                    {activeCompiledShot.title}
+                  </h2>
+                  <p className="text-sm text-neutral-600 mt-0.5">{activeCompiledShot.subtitle}</p>
+                </div>
+                <div className="text-right font-mono-num shrink-0">
+                  <div className="text-xs text-neutral-500">{activeEpisode.date}</div>
+                  <div className="text-base font-bold text-neutral-900">
+                    {compiledTimeline.width}×{compiledTimeline.height}
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-neutral-100 pt-4 space-y-2.5 text-sm">
+                <div className="flex justify-between gap-4">
+                  <span className="text-neutral-500 shrink-0">财经级动效</span>
+                  <span className="text-neutral-900 font-medium text-right">
+                    {activeCompiledShot.editorialCraft}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-neutral-500 shrink-0">重点提炼</span>
+                  <span className="text-[#C8342A] font-medium text-right">
+                    {activeCompiledShot.focusGoal}
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <section className="bg-white border border-neutral-200 rounded-xl p-6">
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h3 className="text-sm font-bold text-neutral-900 min-w-0 truncate">
+                  {activeEpisode.seriesTitle || activeEpisode.title}
+                </h3>
+                <span className="text-xs text-neutral-500 font-mono-num whitespace-nowrap shrink-0">
+                  共 {compiledTimeline.durationSec.toFixed(1)} 秒节奏
+                </span>
+              </div>
+              <div className="divide-y divide-neutral-100 max-h-[380px] overflow-y-auto pr-1">
+                {compiledTimeline.shots.map((shot) => {
+                  const isCurrent = shot.id === activeCompiledShot.id;
+                  return (
+                    <button
+                      key={shot.id}
+                      type="button"
+                      onClick={() => handleSeek(shot.startFrame)}
+                      className={`w-full text-left py-2.5 px-3 rounded-lg transition-colors flex items-center justify-between gap-3 ${
+                        isCurrent
+                          ? 'bg-red-50/70 text-[#C8342A]'
+                          : 'hover:bg-neutral-50 text-neutral-800'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold truncate">
+                          {String(shot.index).padStart(2, '0')}. {shot.title}
+                        </div>
+                        <div className="text-[11px] text-neutral-500 truncate mt-0.5">
+                          {shot.subtitle}
+                        </div>
+                      </div>
+                      <div className="text-right font-mono-num shrink-0">
+                        <div className="text-xs font-semibold">
+                          {shot.startFrame}–{shot.endFrame}
+                        </div>
+                        <div className="text-[11px] text-neutral-400">
+                          {shot.startSec.toFixed(1)}s
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="bg-white border border-neutral-200 rounded-xl p-6">
+              <h3 className="text-sm font-bold text-neutral-900 mb-1">{activeEpisode.title}</h3>
+              <p className="text-xs text-neutral-500 mb-3">
+                {activeEpisode.description}
+                {activeEpisode.metadata?.sourceSummary
+                  ? `（数据来源：${activeEpisode.metadata.sourceSummary}）`
+                  : ''}
+              </p>
+              {episodeVisualCards.length > 0 && (
+                <div className="grid grid-cols-4 gap-2.5">
+                  {episodeVisualCards.map((asset) => (
+                    <button
+                      key={asset.id}
+                      type="button"
+                      onClick={() => handleSeek(asset.jump)}
+                      className="group text-left"
+                    >
+                      <div className="aspect-[3/4] rounded-lg overflow-hidden border border-neutral-200 bg-neutral-900">
+                        <img
+                          src={asset.src}
+                          alt={asset.label}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                        />
+                      </div>
+                      <div className="text-[11px] text-neutral-700 font-medium mt-1.5 truncate text-center">
+                        {asset.label}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
+        ) : projectMode === 'episode' ? (
+          <section className="bg-white border border-neutral-200 rounded-xl p-6 space-y-2">
+            <h2 className="text-base font-bold text-neutral-900">
+              {episodesLoading ? '正在加载每日剧集...' : '尚未加载动态剧集'}
+            </h2>
+            <p className="text-xs text-neutral-500">
+              请点击「刷新列表」重新读取 episodes/*/episode.json，或切换顶部旧版模板预览。
+            </p>
+          </section>
+        ) : isV2Mode && activeV2Shot ? (
           <>
             <section className="bg-white border border-neutral-200 rounded-xl p-6 space-y-4">
               <div className="flex items-start justify-between gap-4">
