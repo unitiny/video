@@ -62,6 +62,21 @@ export function synthesizeEpisodeAudioPcm(
       const stampF = shot.scene.data.stampFrame ?? 90;
       spotlightSnapSecs.push((shot.startFrame + switchF) / fps);
       stampThudSecs.push((shot.startFrame + stampF) / fps);
+    } else if (shot.scene.kind === 'animated_poster_stage') {
+      shot.scene.data.beats.forEach((beat, bIdx) => {
+        const beatAbsSec = (shot.startFrame + beat.enterFrame) / fps;
+        if (beat.sfx === 'snap') {
+          spotlightSnapSecs.push(beatAbsSec);
+        } else if (beat.sfx === 'stamp') {
+          spotlightSnapSecs.push(beatAbsSec);
+          stampThudSecs.push((shot.startFrame + beat.enterFrame + 6) / fps);
+        } else {
+          cardPopTimes.push({ t: beatAbsSec, pitchIdx: bIdx % 4 });
+        }
+        if (beat.stampText && beat.sfx !== 'stamp') {
+          stampThudSecs.push((shot.startFrame + beat.enterFrame + 6) / fps);
+        }
+      });
     }
   }
 

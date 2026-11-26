@@ -119,6 +119,9 @@ export interface MarketBoardTiming {
 }
 
 export interface MarketBoardSceneData {
+  theme?: 'dark' | 'light';
+  centeredHeroTitle?: string;
+  minimalHeader?: boolean;
   headerTag?: string;
   sectionLabel: string;
   usHeadline: string;
@@ -222,13 +225,63 @@ export interface VerdictScenarioData {
   disclaimer?: string;
 }
 
+export type PosterThemeFx = 'inflation_alert' | 'cyber_compute' | 'aerospace_launch';
+
+export type PosterPresentationStyle =
+  | 'spotlight_popout'
+  | 'camera_crash_tour'
+  | 'split_prism_compare'
+  | 'parallax_orbital_flight';
+
+export interface PosterHudCounter {
+  label: string;
+  startValue: number;
+  endValue: number;
+  decimals?: number;
+  prefix?: string;
+  suffix?: string;
+}
+
+export interface PosterSpotlightBeat {
+  id: string;
+  enterFrame: number;
+  exitFrame: number;
+  crop: { x: number; y: number; w: number; h: number };
+  badge: string;
+  calloutTitle: string;
+  calloutDetail?: string;
+  accentColor: string;
+  stampText?: string;
+  counter?: PosterHudCounter;
+  gaugePct?: number;
+  chips?: Array<{ label: string; value: string; color?: string }>;
+  hudPosition?: 'top' | 'bottom';
+  sfx?: 'pop' | 'snap' | 'stamp';
+}
+
+export interface AnimatedPosterStageData {
+  theme?: 'dark' | 'light';
+  presentationStyle?: PosterPresentationStyle;
+  headerTag?: string;
+  kicker: string;
+  headline: string;
+  imageSrc: string;
+  themeFx: PosterThemeFx;
+  accentColor: string;
+  revealHoldStartFrame?: number;
+  beats: PosterSpotlightBeat[];
+  bottomTicker: string;
+  disclaimer?: string;
+}
+
 export type EpisodeSceneKind =
   | 'hook_live_video'
   | 'market_chrono_board'
   | 'event_flow_funnel'
   | 'event_dual_spotlight'
   | 'event_timeline'
-  | 'verdict_scenario';
+  | 'verdict_scenario'
+  | 'animated_poster_stage';
 
 export interface EpisodeSceneBase {
   id: string;
@@ -246,7 +299,8 @@ export type EpisodeScene =
   | (EpisodeSceneBase & { kind: 'event_flow_funnel'; data: EventFlowFunnelData })
   | (EpisodeSceneBase & { kind: 'event_dual_spotlight'; data: EventDualSpotlightData })
   | (EpisodeSceneBase & { kind: 'event_timeline'; data: EventTimelineData })
-  | (EpisodeSceneBase & { kind: 'verdict_scenario'; data: VerdictScenarioData });
+  | (EpisodeSceneBase & { kind: 'verdict_scenario'; data: VerdictScenarioData })
+  | (EpisodeSceneBase & { kind: 'animated_poster_stage'; data: AnimatedPosterStageData });
 
 export interface EpisodeSpec {
   width: number;
@@ -269,6 +323,8 @@ export interface EpisodeManifest {
     createdAt?: string;
     verifiedAt?: string;
     dataSources?: string[];
+    allowNoHook?: boolean;
+    theme?: 'dark' | 'light';
   };
 }
 

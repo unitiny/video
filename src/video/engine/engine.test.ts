@@ -179,3 +179,50 @@ test('create-episode buildEpisodeManifest generates a clean manifest passing str
   });
   assert.equal(report.ok, true, `Scaffold manifest failed validation: ${JSON.stringify(report.errors)}`);
 });
+
+test('2026-11-26 hook-free poster episode compiles, synthesizes audio, collects 3 poster images, and passes strict validation', () => {
+  const ep1126Path = path.join(PROJECT_ROOT, 'episodes', '2026-11-26', 'episode.json');
+  const ep1126 = JSON.parse(fs.readFileSync(ep1126Path, 'utf8')) as EpisodeManifest;
+
+  const tl = compileEpisodeTimeline(ep1126);
+  assert.equal(tl.shots.length, 4);
+  assert.equal(tl.shots[0].kind, 'market_chrono_board');
+  assert.equal(tl.shots[1].kind, 'animated_poster_stage');
+  assert.equal(tl.shots[2].kind, 'animated_poster_stage');
+  assert.equal(tl.shots[3].kind, 'animated_poster_stage');
+  assert.equal(tl.totalFrames, 1140);
+  assert.deepEqual(tl.cutFrames, [420, 660, 900]);
+  assert.equal(ep1126.metadata?.theme, 'dark');
+  assert.equal(tl.shots[0].scene.kind, 'market_chrono_board');
+  if (tl.shots[0].scene.kind === 'market_chrono_board') {
+    assert.equal(tl.shots[0].scene.data.theme, 'dark');
+    assert.equal(tl.shots[0].scene.data.centeredHeroTitle, '11月26号盘前一览');
+    assert.equal(tl.shots[0].scene.data.minimalHeader, true);
+  }
+  const posterStyles = tl.shots
+    .slice(1)
+    .map((s) => (s.scene.kind === 'animated_poster_stage' ? s.scene.data.presentationStyle : undefined))
+    .filter(Boolean);
+  assert.equal(new Set(posterStyles).size, 3, 'All 3 poster scenes should use distinct presentation styles');
+  assert.equal(posterStyles[2], 'spotlight_popout', 'Scene 04 should use spotlight_popout Focus-and-Dim style');
+
+  const assets = collectEpisodeAssetSources(ep1126);
+  assert.equal(assets.hookVideos.length, 0);
+  assert.equal(assets.imageSrcs.length, 3);
+
+  const pcm = synthesizeEpisodeAudioPcm(ep1126, 22050);
+  assert.equal(pcm.left.length, Math.floor(22050 * tl.durationSec));
+  let peak = 0;
+  for (let i = 0; i < pcm.left.length; i += 97) {
+    peak = Math.max(peak, Math.abs(pcm.left[i]), Math.abs(pcm.right[i]));
+  }
+  assert.ok(peak > 0.1 && peak <= 1.0);
+
+  const report = validateEpisodeManifest(ep1126, {
+    strictAssetCheck: true,
+    projectRoot: PROJECT_ROOT,
+  });
+  assert.equal(report.ok, true, `11.26 validation failed: ${JSON.stringify(report.errors)}`);
+  assert.equal(report.errors.length, 0);
+  assert.equal(report.warnings.length, 0);
+});

@@ -72,7 +72,8 @@ function getShotPreviewAsset(shot: CompiledShot): string | null {
   if (
     scene.kind === 'event_flow_funnel' ||
     scene.kind === 'event_dual_spotlight' ||
-    scene.kind === 'event_timeline'
+    scene.kind === 'event_timeline' ||
+    scene.kind === 'animated_poster_stage'
   ) {
     return scene.data.imageSrc || null;
   }
@@ -513,11 +514,19 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
         {/* Phone Frame Canvas Viewport */}
         <div className="my-4 flex flex-col items-center justify-center w-full">
           <div
-            className="relative bg-neutral-950 rounded-[26px] p-2 shadow-lg border border-neutral-800"
+            className={`relative rounded-[26px] p-2 shadow-lg border ${
+              isEpisodeMode && activeEpisode?.metadata?.theme === 'light'
+                ? 'bg-neutral-100 border-neutral-300'
+                : 'bg-neutral-950 border-neutral-800'
+            }`}
             style={{ width: isPortrait916 ? 'min(100%, 300px)' : 'min(100%, 256px)' }}
           >
             <div
-              className="relative w-full overflow-hidden rounded-[18px] bg-[#101216]"
+              className={`relative w-full overflow-hidden rounded-[18px] ${
+                isEpisodeMode && activeEpisode?.metadata?.theme === 'light'
+                  ? 'bg-white'
+                  : 'bg-black'
+              }`}
               style={{ aspectRatio: `${spec.width} / ${spec.height}` }}
             >
               <canvas

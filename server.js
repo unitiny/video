@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import crypto from "crypto";
-import { execFile } from "child_process";
+import { execFile, spawnSync } from "child_process";
 import { promisify } from "util";
 import { createServer as createViteServer } from "vite";
 
@@ -1370,9 +1370,296 @@ function synthesizeIntelV2TrackPcm(sampleRate = 44100, durationSec = INTEL_V2_SP
   return { sampleRate, left, right };
 }
 
+// src/video/engine/timeline.ts
+var DEFAULT_MARKET_BOARD_TIMING = {
+  usStart: 0,
+  usHeadlineFrame: 16,
+  usTypeStart: 26,
+  usTypeEnd: 86,
+  asiaStart: 116,
+  asiaTypeStart: 134,
+  asiaTypeEnd: 188,
+  commodityStart: 214,
+  commodityTypeStart: 232,
+  commodityTypeEnd: 284,
+  a50Start: 302,
+  a50NoteStart: 332,
+  a50NoteEnd: 364
+};
+function resolveMarketBoardTiming(partial) {
+  return {
+    ...DEFAULT_MARKET_BOARD_TIMING,
+    ...partial ?? {}
+  };
+}
+function compileEpisodeTimeline(episode) {
+  const fps = episode.spec.fps || 30;
+  let cursor = 0;
+  const shots = [];
+  const cutFrames = [];
+  episode.scenes.forEach((scene, idx) => {
+    const dur = Math.max(1, Math.round(scene.durationFrames));
+    const startFrame = cursor;
+    const endFrame = cursor + dur - 1;
+    if (idx > 0) {
+      cutFrames.push(startFrame);
+    }
+    shots.push({
+      id: scene.id,
+      index: idx + 1,
+      kind: scene.kind,
+      startFrame,
+      endFrame,
+      durationFrames: dur,
+      startSec: Number((startFrame / fps).toFixed(3)),
+      endSec: Number(((endFrame + 1) / fps).toFixed(3)),
+      title: scene.title,
+      subtitle: scene.subtitle,
+      editorialCraft: scene.editorialCraft,
+      focusGoal: scene.focusGoal,
+      scene
+    });
+    cursor += dur;
+  });
+  const totalFrames = Math.max(1, cursor);
+  return {
+    episodeId: episode.id,
+    fps,
+    width: episode.spec.width,
+    height: episode.spec.height,
+    bpm: episode.spec.bpm,
+    totalFrames,
+    durationSec: Number((totalFrames / fps).toFixed(3)),
+    cutFrames,
+    shots
+  };
+}
+
+// src/video/engine/audioSynth.ts
+function synthesizeEpisodeAudioPcm(episode, sampleRate = 44100) {
+  const tl = compileEpisodeTimeline(episode);
+  const durationSec = tl.durationSec;
+  const totalSamples = Math.floor(sampleRate * durationSec);
+  const left = new Float32Array(totalSamples);
+  const right = new Float32Array(totalSamples);
+  const bpm = tl.bpm || 112;
+  const beatDur = 60 / bpm;
+  const fps = tl.fps || 30;
+  const chords = [
+    [220, 261.63, 329.63, 440],
+    // Am
+    [174.61, 220, 261.63, 349.23],
+    // Fmaj7
+    [196, 246.94, 293.66, 392],
+    // G
+    [261.63, 329.63, 392, 493.88]
+    // Cmaj7
+  ];
+  const bassRoots = [55, 43.65, 49, 65.41];
+  const cutTimes = tl.cutFrames.map((f) => f / fps);
+  const memeImpactSecs = [];
+  const typeWindows = [];
+  const cardPopTimes = [];
+  const spotlightSnapSecs = [];
+  const stampThudSecs = [];
+  for (const shot of tl.shots) {
+    if (shot.scene.kind === "hook_live_video") {
+      memeImpactSecs.push((shot.startFrame + 8) / fps);
+    } else if (shot.scene.kind === "market_chrono_board") {
+      const timing = resolveMarketBoardTiming(shot.scene.data.timing);
+      const base = shot.startFrame;
+      typeWindows.push(
+        [(base + timing.usTypeStart) / fps, (base + timing.usTypeEnd) / fps],
+        [(base + timing.asiaTypeStart) / fps, (base + timing.asiaTypeEnd) / fps],
+        [(base + timing.commodityTypeStart) / fps, (base + timing.commodityTypeEnd) / fps],
+        [(base + timing.a50NoteStart) / fps, (base + timing.a50NoteEnd) / fps]
+      );
+      cardPopTimes.push(
+        { t: (base + timing.usStart + 4) / fps, pitchIdx: 0 },
+        { t: (base + timing.asiaStart + 2) / fps, pitchIdx: 1 },
+        { t: (base + timing.commodityStart + 2) / fps, pitchIdx: 2 },
+        { t: (base + timing.a50Start + 4) / fps, pitchIdx: 3 }
+      );
+    } else if (shot.scene.kind === "event_dual_spotlight") {
+      const switchF = shot.scene.data.switchFrame ?? 70;
+      const stampF = shot.scene.data.stampFrame ?? 90;
+      spotlightSnapSecs.push((shot.startFrame + switchF) / fps);
+      stampThudSecs.push((shot.startFrame + stampF) / fps);
+    } else if (shot.scene.kind === "animated_poster_stage") {
+      shot.scene.data.beats.forEach((beat, bIdx) => {
+        const beatAbsSec = (shot.startFrame + beat.enterFrame) / fps;
+        if (beat.sfx === "snap") {
+          spotlightSnapSecs.push(beatAbsSec);
+        } else if (beat.sfx === "stamp") {
+          spotlightSnapSecs.push(beatAbsSec);
+          stampThudSecs.push((shot.startFrame + beat.enterFrame + 6) / fps);
+        } else {
+          cardPopTimes.push({ t: beatAbsSec, pitchIdx: bIdx % 4 });
+        }
+        if (beat.stampText && beat.sfx !== "stamp") {
+          stampThudSecs.push((shot.startFrame + beat.enterFrame + 6) / fps);
+        }
+      });
+    }
+  }
+  let lfsr = 1821285621;
+  const nextNoise = () => {
+    lfsr ^= lfsr << 13;
+    lfsr ^= lfsr >>> 17;
+    lfsr ^= lfsr << 5;
+    return (lfsr >>> 0) / 4294967296 * 2 - 1;
+  };
+  let lp = 0;
+  for (let i = 0; i < totalSamples; i++) {
+    const t = i / sampleRate;
+    let masterEnv = 1;
+    if (t < 0.04) masterEnv = t / 0.04;
+    if (t > durationSec - 0.7) masterEnv = Math.max(0, (durationSec - t) / 0.7);
+    const beatFloat = t / beatDur;
+    const beatIndex = Math.floor(beatFloat);
+    const beatPhase = (beatFloat - beatIndex) * beatDur;
+    const barIndex = Math.floor(beatIndex / 4);
+    const sixteenthFloat = beatFloat * 4;
+    const sixteenthIdx = Math.floor(sixteenthFloat);
+    const sixteenthPhase = (sixteenthFloat - sixteenthIdx) * (beatDur * 0.25);
+    const n = nextNoise();
+    lp = lp * 0.75 + n * 0.25;
+    let kick = 0;
+    if (beatPhase < 0.13) {
+      const kEnv = Math.exp(-beatPhase * 28);
+      const kFreq = 50 + 95 * Math.exp(-beatPhase * 42);
+      kick = Math.sin(2 * Math.PI * kFreq * beatPhase) * kEnv * 0.35;
+    }
+    let dataTick = 0;
+    const inTypeWindow = typeWindows.some(([ws, we]) => t >= ws && t <= we);
+    if (inTypeWindow && sixteenthPhase < 0.015) {
+      dataTick = Math.sin(2 * Math.PI * (1280 + sixteenthIdx % 4 * 210) * sixteenthPhase) * Math.exp(-sixteenthPhase * 190) * 0.075;
+    }
+    const chord = chords[barIndex % chords.length];
+    const eighthFloat = beatFloat * 2;
+    const eighthIdx = Math.floor(eighthFloat);
+    const eighthPhase = (eighthFloat - eighthIdx) * (beatDur * 0.5);
+    const note = chord[eighthIdx % chord.length];
+    const pluck = (Math.sin(2 * Math.PI * note * t) * 0.7 + Math.sin(4 * Math.PI * note * t) * 0.16) * Math.exp(-eighthPhase * 6.5) * 0.17;
+    const pan = (eighthIdx % 4 - 1.5) * 0.22;
+    const bassFreq = bassRoots[barIndex % bassRoots.length];
+    const bass = Math.sin(2 * Math.PI * bassFreq * t) * Math.exp(-beatPhase * 4.2) * 0.24;
+    let sfx = 0;
+    for (let m = 0; m < memeImpactSecs.length; m++) {
+      const dMeme = t - memeImpactSecs[m];
+      if (dMeme >= 0 && dMeme < 0.34) {
+        sfx += Math.sin(2 * Math.PI * (165 * Math.exp(-dMeme * 14) + 48) * dMeme) * Math.exp(-dMeme * 12) * 0.48;
+        sfx += lp * Math.exp(-dMeme * 18) * 0.14;
+      }
+    }
+    for (let p = 0; p < cardPopTimes.length; p++) {
+      const dp = t - cardPopTimes[p].t;
+      if (dp >= 0 && dp < 0.18) {
+        sfx += Math.sin(2 * Math.PI * (440 + cardPopTimes[p].pitchIdx * 85) * dp) * Math.exp(-dp * 22) * 0.14;
+      }
+    }
+    for (let s = 0; s < spotlightSnapSecs.length; s++) {
+      const dl = t - spotlightSnapSecs[s];
+      if (dl >= 0 && dl < 0.09) {
+        sfx += ((n - lp) * 0.25 + Math.sin(2 * Math.PI * 980 * dl) * 0.2) * Math.exp(-dl * 45);
+      }
+    }
+    for (let s = 0; s < stampThudSecs.length; s++) {
+      const dt = t - stampThudSecs[s];
+      if (dt >= 0 && dt < 0.22) {
+        sfx += (Math.sin(2 * Math.PI * 76 * dt) * 0.6 + lp * 0.35) * Math.exp(-dt * 22);
+      }
+    }
+    for (let c = 0; c < cutTimes.length; c++) {
+      const dc = t - cutTimes[c];
+      if (dc >= -0.04 && dc <= 0.22) {
+        const env = dc < 0 ? (dc + 0.04) / 0.04 : Math.exp(-dc * 12);
+        sfx += lp * env * 0.2;
+      }
+    }
+    const mixL = (kick + dataTick + pluck * (1 - pan) + bass + sfx) * masterEnv;
+    const mixR = (kick + dataTick + pluck * (1 + pan) + bass + sfx) * masterEnv;
+    left[i] = Math.tanh(mixL * 0.92);
+    right[i] = Math.tanh(mixR * 0.92);
+  }
+  return { sampleRate, left, right };
+}
+
 // server.ts
 var execFileAsync = promisify(execFile);
 var PORT = Number(process.env.PORT || 3e3);
+var EPISODE_ID_RE = /^[A-Za-z0-9_-]+$/;
+var episodesRootDir = path.resolve(process.cwd(), "episodes");
+var assetsRootDir = path.resolve(process.cwd(), "assets");
+var cachedFfmpegBinary;
+function probeFfmpegBinary(candidate) {
+  try {
+    const res = spawnSync(candidate, ["-version"], {
+      stdio: "ignore",
+      timeout: 5e3,
+      windowsHide: true
+    });
+    return !res.error && res.status === 0;
+  } catch {
+    return false;
+  }
+}
+function resolveFfmpegBinary() {
+  if (cachedFfmpegBinary !== void 0) {
+    return cachedFfmpegBinary;
+  }
+  const candidates = [];
+  const envPath = process.env.FFMPEG_PATH?.trim();
+  if (envPath) {
+    candidates.push(envPath);
+  }
+  candidates.push("ffmpeg");
+  if (process.platform === "win32") {
+    candidates.push("ffmpeg.exe");
+  }
+  if (fs.existsSync("/usr/bin/ffmpeg")) {
+    candidates.push("/usr/bin/ffmpeg");
+  }
+  for (const candidate of candidates) {
+    if (probeFfmpegBinary(candidate)) {
+      cachedFfmpegBinary = candidate;
+      return cachedFfmpegBinary;
+    }
+  }
+  cachedFfmpegBinary = null;
+  return null;
+}
+function isValidEpisodeId(id) {
+  return EPISODE_ID_RE.test(id);
+}
+function getEpisodeManifestPath(id) {
+  return path.join(episodesRootDir, id, "episode.json");
+}
+function loadEpisodeManifest(id) {
+  if (!isValidEpisodeId(id)) return null;
+  const manifestPath = getEpisodeManifestPath(id);
+  if (!fs.existsSync(manifestPath)) return null;
+  const raw = fs.readFileSync(manifestPath, "utf-8");
+  return JSON.parse(raw);
+}
+function isValidEpisodeManifestBody(body) {
+  if (!body || typeof body !== "object") return false;
+  const obj = body;
+  const spec = obj.spec;
+  if (!spec || typeof spec !== "object") return false;
+  if (typeof spec.width !== "number" || !Number.isFinite(spec.width) || spec.width <= 0 || typeof spec.height !== "number" || !Number.isFinite(spec.height) || spec.height <= 0 || typeof spec.fps !== "number" || !Number.isFinite(spec.fps) || spec.fps <= 0) {
+    return false;
+  }
+  if (!Array.isArray(obj.scenes) || obj.scenes.length === 0) return false;
+  for (const scene of obj.scenes) {
+    if (!scene || typeof scene !== "object") return false;
+    const s = scene;
+    if (typeof s.id !== "string" || !s.id.trim() || typeof s.kind !== "string" || typeof s.durationFrames !== "number" || !Number.isFinite(s.durationFrames) || s.durationFrames <= 0) {
+      return false;
+    }
+  }
+  return true;
+}
 var sessions = /* @__PURE__ */ new Map();
 setInterval(() => {
   const now = Date.now();
@@ -1386,10 +1673,151 @@ setInterval(() => {
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: "80mb" }));
+  app.use("/episodes", express.static(episodesRootDir));
+  app.use("/assets", express.static(assetsRootDir));
   app.get("/api/health", (_req, res) => {
-    res.json({ ok: true, ffmpeg: fs.existsSync("/usr/bin/ffmpeg") });
+    const ffmpegBin = resolveFfmpegBinary();
+    res.json({ ok: true, ffmpeg: Boolean(ffmpegBin), ffmpegPath: ffmpegBin ?? null });
+  });
+  app.get("/api/episodes", (_req, res) => {
+    try {
+      if (!fs.existsSync(episodesRootDir)) {
+        res.json({ episodes: [] });
+        return;
+      }
+      const entries = fs.readdirSync(episodesRootDir, { withFileTypes: true });
+      const episodes = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !isValidEpisodeId(entry.name)) continue;
+        const manifestPath = getEpisodeManifestPath(entry.name);
+        if (!fs.existsSync(manifestPath)) continue;
+        try {
+          const raw = fs.readFileSync(manifestPath, "utf-8");
+          const episode = JSON.parse(raw);
+          if (!isValidEpisodeManifestBody(episode)) continue;
+          const tl = compileEpisodeTimeline(episode);
+          const hookScene = episode.scenes.find((s) => s.kind === "hook_live_video");
+          const firstPosterScene = episode.scenes.find(
+            (s) => s.kind === "animated_poster_stage"
+          );
+          episodes.push({
+            id: episode.id || entry.name,
+            date: episode.date || entry.name,
+            title: episode.title || entry.name,
+            seriesTitle: episode.seriesTitle || "",
+            description: episode.description || "",
+            totalFrames: tl.totalFrames,
+            durationSec: tl.durationSec,
+            fps: tl.fps,
+            bpm: tl.bpm,
+            width: tl.width,
+            height: tl.height,
+            shotCount: tl.shots.length,
+            hookId: hookScene?.kind === "hook_live_video" ? hookScene.data.hookId : void 0,
+            posterSrc: hookScene?.kind === "hook_live_video" ? hookScene.data.posterSrc : firstPosterScene?.kind === "animated_poster_stage" ? firstPosterScene.data.imageSrc : void 0
+          });
+        } catch {
+        }
+      }
+      episodes.sort((a, b) => {
+        const byDate = b.date.localeCompare(a.date);
+        return byDate !== 0 ? byDate : b.id.localeCompare(a.id);
+      });
+      res.json({ episodes });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to list episodes";
+      res.status(500).json({ error: message });
+    }
+  });
+  app.get("/api/episodes/:id", (req, res) => {
+    const id = String(req.params.id || "");
+    if (!isValidEpisodeId(id)) {
+      res.status(400).json({ error: "Invalid episode id" });
+      return;
+    }
+    try {
+      const episode = loadEpisodeManifest(id);
+      if (!episode) {
+        res.status(404).json({ error: `Episode "${id}" not found` });
+        return;
+      }
+      res.json(episode);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to read episode";
+      res.status(500).json({ error: message });
+    }
+  });
+  app.post("/api/episodes/:id", (req, res) => {
+    const id = String(req.params.id || "");
+    if (!isValidEpisodeId(id)) {
+      res.status(400).json({ error: "Invalid episode id" });
+      return;
+    }
+    if (!isValidEpisodeManifestBody(req.body)) {
+      res.status(400).json({ error: "Invalid EpisodeManifest payload" });
+      return;
+    }
+    try {
+      const targetDir = path.join(episodesRootDir, id);
+      fs.mkdirSync(targetDir, { recursive: true });
+      const manifest = {
+        ...req.body,
+        id
+      };
+      fs.writeFileSync(
+        path.join(targetDir, "episode.json"),
+        `${JSON.stringify(manifest, null, 2)}
+`,
+        "utf-8"
+      );
+      res.json({ ok: true, id });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to save episode";
+      res.status(500).json({ error: message });
+    }
+  });
+  app.get("/api/hooks", (_req, res) => {
+    try {
+      const hooksManifestPath = path.join(assetsRootDir, "hooks", "manifest.json");
+      if (!fs.existsSync(hooksManifestPath)) {
+        res.status(404).json({ error: "Hooks manifest not found" });
+        return;
+      }
+      const raw = fs.readFileSync(hooksManifestPath, "utf-8");
+      res.json(JSON.parse(raw));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load hooks manifest";
+      res.status(500).json({ error: message });
+    }
   });
   app.get("/api/audio/bgm.wav", (req, res) => {
+    const episodeId = typeof req.query.episodeId === "string" ? req.query.episodeId.trim() : "";
+    if (episodeId) {
+      if (!isValidEpisodeId(episodeId)) {
+        res.status(400).json({ error: "Invalid episodeId" });
+        return;
+      }
+      try {
+        const episode = loadEpisodeManifest(episodeId);
+        if (!episode) {
+          res.status(404).json({ error: `Episode "${episodeId}" not found` });
+          return;
+        }
+        const pcm2 = synthesizeEpisodeAudioPcm(episode, 44100);
+        const wav2 = encodeStereoWav(pcm2);
+        res.setHeader("Content-Type", "audio/wav");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${episodeId}_editorial_bgm.wav"`
+        );
+        res.send(Buffer.from(wav2));
+        return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to synthesize episode audio";
+        res.status(500).json({ error: message });
+        return;
+      }
+    }
     const track = String(req.query.track || "1120_v2");
     const pcm = track === "1120_v2" ? synthesizeIntelV2TrackPcm(44100) : track === "1120" ? synthesizeIntelTrackPcm(44100) : synthesizeTrackPcm(44100);
     const wav = encodeStereoWav(pcm);
@@ -1403,8 +1831,28 @@ async function startServer() {
       totalFrames = 900,
       width = 1080,
       height = 1920,
-      track = "1120"
+      fps = 30,
+      track = "1120",
+      episodeId
     } = req.body ?? {};
+    let validatedEpisodeId;
+    let resolvedFps = Number(fps) > 0 ? Number(fps) : 30;
+    if (typeof episodeId === "string" && episodeId.trim()) {
+      const cleanId = episodeId.trim();
+      if (!isValidEpisodeId(cleanId)) {
+        res.status(400).json({ error: "Invalid episodeId" });
+        return;
+      }
+      const episode = loadEpisodeManifest(cleanId);
+      if (!episode) {
+        res.status(404).json({ error: `Episode "${cleanId}" not found` });
+        return;
+      }
+      validatedEpisodeId = cleanId;
+      if (!req.body?.fps && episode.spec?.fps > 0) {
+        resolvedFps = episode.spec.fps;
+      }
+    }
     const sessionId = crypto.randomUUID();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `quantreel-${sessionId}-`));
     sessions.set(sessionId, {
@@ -1412,7 +1860,9 @@ async function startServer() {
       totalFrames: Number(totalFrames),
       width: Number(width),
       height: Number(height),
+      fps: resolvedFps,
       track: String(track),
+      episodeId: validatedEpisodeId,
       receivedFrames: 0,
       createdAt: Date.now()
     });
@@ -1440,16 +1890,33 @@ async function startServer() {
       res.status(404).json({ error: "Export session not found" });
       return;
     }
+    const ffmpegBin = resolveFfmpegBinary();
+    if (!ffmpegBin) {
+      res.status(503).json({
+        error: "FFmpeg binary not available on server; please use browser WebCodecs fallback."
+      });
+      return;
+    }
     try {
       const wavPath = path.join(sess.dir, "bgm.wav");
       const mp4Path = path.join(sess.dir, "output.mp4");
-      const pcm = sess.track === "1120_v2" ? synthesizeIntelV2TrackPcm(44100) : sess.track === "1120" ? synthesizeIntelTrackPcm(44100) : synthesizeTrackPcm(44100);
+      let pcm;
+      if (sess.episodeId) {
+        const episode = loadEpisodeManifest(sess.episodeId);
+        if (!episode) {
+          res.status(404).json({ error: `Episode "${sess.episodeId}" not found` });
+          return;
+        }
+        pcm = synthesizeEpisodeAudioPcm(episode, 44100);
+      } else {
+        pcm = sess.track === "1120_v2" ? synthesizeIntelV2TrackPcm(44100) : sess.track === "1120" ? synthesizeIntelTrackPcm(44100) : synthesizeTrackPcm(44100);
+      }
       const wav = encodeStereoWav(pcm);
       fs.writeFileSync(wavPath, Buffer.from(wav));
-      await execFileAsync("/usr/bin/ffmpeg", [
+      await execFileAsync(ffmpegBin, [
         "-y",
         "-framerate",
-        "30",
+        String(sess.fps || 30),
         "-i",
         path.join(sess.dir, "frame_%04d.jpg"),
         "-i",
@@ -1491,7 +1958,7 @@ async function startServer() {
       res.status(404).json({ error: "Rendered MP4 not found" });
       return;
     }
-    const downloadName = sess.track === "1120_v2" ? "1120_v2_morning_intel_final.mp4" : sess.track === "1120" ? "1120_morning_intel_final.mp4" : "1117_close_fund_flow_replica.mp4";
+    const downloadName = sess.episodeId ? `${sess.episodeId}_morning_intel_final.mp4` : sess.track === "1120_v2" ? "1120_v2_morning_intel_final.mp4" : sess.track === "1120" ? "1120_morning_intel_final.mp4" : "1117_close_fund_flow_replica.mp4";
     res.download(sess.mp4Path, downloadName);
   });
   app.use("/api", (_req, res) => {
@@ -1522,3 +1989,6 @@ async function startServer() {
   });
 }
 startServer();
+export {
+  resolveFfmpegBinary
+};

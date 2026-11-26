@@ -206,7 +206,8 @@ export function collectEpisodeAssetSources(episode: EpisodeManifest): {
     } else if (
       scene.kind === 'event_flow_funnel' ||
       scene.kind === 'event_dual_spotlight' ||
-      scene.kind === 'event_timeline'
+      scene.kind === 'event_timeline' ||
+      scene.kind === 'animated_poster_stage'
     ) {
       if (scene.data.imageSrc) {
         imageSet.add(scene.data.imageSrc);

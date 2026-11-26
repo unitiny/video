@@ -177,6 +177,9 @@ async function startServer() {
 
           const tl = compileEpisodeTimeline(episode);
           const hookScene = episode.scenes.find((s) => s.kind === 'hook_live_video');
+          const firstPosterScene = episode.scenes.find(
+            (s) => s.kind === 'animated_poster_stage'
+          );
 
           episodes.push({
             id: episode.id || entry.name,
@@ -192,7 +195,12 @@ async function startServer() {
             height: tl.height,
             shotCount: tl.shots.length,
             hookId: hookScene?.kind === 'hook_live_video' ? hookScene.data.hookId : undefined,
-            posterSrc: hookScene?.kind === 'hook_live_video' ? hookScene.data.posterSrc : undefined,
+            posterSrc:
+              hookScene?.kind === 'hook_live_video'
+                ? hookScene.data.posterSrc
+                : firstPosterScene?.kind === 'animated_poster_stage'
+                  ? firstPosterScene.data.imageSrc
+                  : undefined,
           });
         } catch {
           // Skip malformed episode.json files without failing the list endpoint

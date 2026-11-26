@@ -23,7 +23,8 @@ function getCompiledShotAsset(shot: CompiledShot): string | null {
   if (
     scene.kind === 'event_flow_funnel' ||
     scene.kind === 'event_dual_spotlight' ||
-    scene.kind === 'event_timeline'
+    scene.kind === 'event_timeline' ||
+    scene.kind === 'animated_poster_stage'
   ) {
     return scene.data.imageSrc || null;
   }

@@ -280,25 +280,36 @@ export function drawMiniDailyCandles(
   candles: DailyCandle[],
   todayAnimT: number,
   accentLabel = '#94A3B8',
-  heroMode = false
+  heroMode = false,
+  light = false
 ): void {
   ctx.save();
-  ctx.fillStyle = 'rgba(7, 11, 18, 0.84)';
+  ctx.fillStyle = light
+    ? heroMode
+      ? 'rgba(255, 255, 255, 0.88)'
+      : '#F8FAFC'
+    : 'rgba(7, 11, 18, 0.84)';
   roundRect(ctx, x, y, w, h, 10);
   ctx.fill();
-  ctx.strokeStyle = heroMode ? 'rgba(251, 191, 36, 0.25)' : 'rgba(255, 255, 255, 0.08)';
+  ctx.strokeStyle = light
+    ? heroMode
+      ? 'rgba(217, 119, 6, 0.36)'
+      : '#E2E8F0'
+    : heroMode
+      ? 'rgba(251, 191, 36, 0.25)'
+      : 'rgba(255, 255, 255, 0.08)';
   ctx.lineWidth = 1;
   ctx.stroke();
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.font = `800 ${heroMode ? 22 : 16}px ${FONT}`;
-  ctx.fillStyle = accentLabel;
+  ctx.fillStyle = light ? (heroMode ? '#92400E' : '#475569') : accentLabel;
   ctx.fillText('日K', x + 10, y + 6);
 
   ctx.textAlign = 'right';
   ctx.font = `700 ${heroMode ? 17 : 13}px ${FONT}`;
-  ctx.fillStyle = 'rgba(251, 191, 36, 0.86)';
+  ctx.fillStyle = light ? '#B45309' : 'rgba(251, 191, 36, 0.86)';
   ctx.fillText('今日', x + w - 9, y + 7);
 
   if (candles.length === 0) {
@@ -323,7 +334,7 @@ export function drawMiniDailyCandles(
   const mapY = (v: number) =>
     lerp(plotBot, plotTop, clamp((v - padMin) / (padMax - padMin), 0, 1));
 
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+  ctx.strokeStyle = light ? 'rgba(15, 23, 42, 0.08)' : 'rgba(255, 255, 255, 0.06)';
   ctx.lineWidth = 1;
   ctx.setLineDash([3, 3]);
   ctx.beginPath();
@@ -345,7 +356,7 @@ export function drawMiniDailyCandles(
     const curClose = lerp(c.open, c.close, t);
 
     const isUp = curClose >= curOpen;
-    const col = isUp ? '#F87171' : '#2DD4BF';
+    const col = light ? (isUp ? '#DC2626' : '#059669') : isUp ? '#F87171' : '#2DD4BF';
     const cx = plotX + stepW * (idx + 0.5);
 
     const yHigh = mapY(curHigh);
@@ -354,7 +365,13 @@ export function drawMiniDailyCandles(
     const yClose = mapY(curClose);
 
     if (isToday) {
-      ctx.fillStyle = isUp ? 'rgba(248, 113, 113, 0.14)' : 'rgba(45, 212, 191, 0.14)';
+      ctx.fillStyle = light
+        ? isUp
+          ? 'rgba(220, 38, 38, 0.1)'
+          : 'rgba(5, 150, 105, 0.1)'
+        : isUp
+          ? 'rgba(248, 113, 113, 0.14)'
+          : 'rgba(45, 212, 191, 0.14)';
       roundRect(ctx, cx - stepW * 0.44, plotTop - 2, stepW * 0.88, plotBot - plotTop + 4, 4);
       ctx.fill();
     }
@@ -370,9 +387,13 @@ export function drawMiniDailyCandles(
     const bodyH = Math.max(3.5, Math.abs(yClose - yOpen));
     ctx.fillStyle = isToday
       ? col
-      : isUp
-        ? 'rgba(248, 113, 113, 0.78)'
-        : 'rgba(45, 212, 191, 0.78)';
+      : light
+        ? isUp
+          ? 'rgba(220, 38, 38, 0.82)'
+          : 'rgba(5, 150, 105, 0.82)'
+        : isUp
+          ? 'rgba(248, 113, 113, 0.78)'
+          : 'rgba(45, 212, 191, 0.78)';
     ctx.fillRect(cx - bodyW / 2, bodyTop, bodyW, bodyH);
   });
 
@@ -397,25 +418,36 @@ export function drawMiniIntradayChart(
   drawT: number,
   loopPhase: number,
   accentLabel = '#94A3B8',
-  heroMode = false
+  heroMode = false,
+  light = false
 ): void {
   ctx.save();
-  ctx.fillStyle = 'rgba(7, 11, 18, 0.84)';
+  ctx.fillStyle = light
+    ? heroMode
+      ? 'rgba(255, 255, 255, 0.88)'
+      : '#F8FAFC'
+    : 'rgba(7, 11, 18, 0.84)';
   roundRect(ctx, x, y, w, h, 10);
   ctx.fill();
-  ctx.strokeStyle = heroMode ? 'rgba(251, 191, 36, 0.25)' : 'rgba(255, 255, 255, 0.08)';
+  ctx.strokeStyle = light
+    ? heroMode
+      ? 'rgba(217, 119, 6, 0.36)'
+      : '#E2E8F0'
+    : heroMode
+      ? 'rgba(251, 191, 36, 0.25)'
+      : 'rgba(255, 255, 255, 0.08)';
   ctx.lineWidth = 1;
   ctx.stroke();
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.font = `800 ${heroMode ? 22 : 16}px ${FONT}`;
-  ctx.fillStyle = accentLabel;
+  ctx.fillStyle = light ? (heroMode ? '#92400E' : '#475569') : accentLabel;
   ctx.fillText('分时', x + 10, y + 6);
 
   ctx.textAlign = 'right';
   ctx.font = `700 ${heroMode ? 17 : 13}px ${FONT}`;
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.84)';
+  ctx.fillStyle = light ? '#64748B' : 'rgba(148, 163, 184, 0.84)';
   ctx.fillText(heroMode ? '全天分时走势' : '全天分时', x + w - 9, y + 7);
 
   if (points.length < 2) {
@@ -444,7 +476,7 @@ export function drawMiniIntradayChart(
     lerp(plotBot, plotTop, clamp((v - padMin) / (padMax - padMin), 0, 1));
 
   // Subtle vertical session grid (midday divider)
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+  ctx.strokeStyle = light ? 'rgba(15, 23, 42, 0.06)' : 'rgba(255, 255, 255, 0.05)';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(plotX + plotW * 0.5, plotTop);
@@ -453,7 +485,7 @@ export function drawMiniIntradayChart(
 
   // 0% dashed baseline
   const zeroY = mapY(0);
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.24)';
+  ctx.strokeStyle = light ? 'rgba(15, 23, 42, 0.24)' : 'rgba(255, 255, 255, 0.24)';
   ctx.lineWidth = 1;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
@@ -465,14 +497,14 @@ export function drawMiniIntradayChart(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
   ctx.font = `700 ${heroMode ? 15 : 12}px ${MONO}`;
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.72)';
+  ctx.fillStyle = light ? '#64748B' : 'rgba(148, 163, 184, 0.72)';
   ctx.fillText('0%', plotX + 2, zeroY - 2);
 
   // Bottom session time ticks
   const tickY = y + h - 3;
   ctx.textBaseline = 'bottom';
   ctx.font = `700 ${heroMode ? 16 : 13}px ${FONT}`;
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.72)';
+  ctx.fillStyle = light ? '#64748B' : 'rgba(148, 163, 184, 0.72)';
   ctx.textAlign = 'left';
   ctx.fillText('开盘', plotX, tickY);
   ctx.textAlign = 'center';
@@ -502,14 +534,18 @@ export function drawMiniIntradayChart(
     const bh = Math.max(2, v * volHeight);
     ctx.fillStyle =
       points[vi] >= (points[vi - 1] ?? points[0])
-        ? `rgba(248, 113, 113, ${barAlpha})`
-        : `rgba(45, 212, 191, ${barAlpha})`;
+        ? light
+          ? `rgba(220, 38, 38, ${barAlpha})`
+          : `rgba(248, 113, 113, ${barAlpha})`
+        : light
+          ? `rgba(5, 150, 105, ${barAlpha})`
+          : `rgba(45, 212, 191, ${barAlpha})`;
     ctx.fillRect(bx, volBaseY - bh, barW, bh);
   });
 
   if (prog > 0.01) {
     const areaGrad = ctx.createLinearGradient(0, plotTop, 0, plotBot);
-    areaGrad.addColorStop(0, `${lineColor}44`);
+    areaGrad.addColorStop(0, light ? `${lineColor}33` : `${lineColor}44`);
     areaGrad.addColorStop(1, `${lineColor}05`);
 
     ctx.fillStyle = areaGrad;
@@ -535,7 +571,7 @@ export function drawMiniIntradayChart(
         ? maPoints[maPoints.length - 1]
         : lerp(maPoints[fullIdx], maPoints[fullIdx + 1], frac);
 
-    ctx.strokeStyle = 'rgba(251, 191, 36, 0.72)';
+    ctx.strokeStyle = light ? 'rgba(217, 119, 6, 0.85)' : 'rgba(251, 191, 36, 0.72)';
     ctx.lineWidth = heroMode ? 1.8 : 1.3;
     ctx.beginPath();
     for (let i = 0; i <= fullIdx; i++) {
@@ -576,7 +612,7 @@ export function drawMiniIntradayChart(
     ctx.beginPath();
     ctx.arc(dotX, dotY, heroMode ? 9 : 6.5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#FFFFFF';
+    ctx.fillStyle = light ? lineColor : '#FFFFFF';
     ctx.beginPath();
     ctx.arc(dotX, dotY, heroMode ? 4 : 3, 0, Math.PI * 2);
     ctx.fill();
@@ -590,6 +626,7 @@ export interface CleanIndexCardOptions {
   heroShapeNote?: string;
   heroNoteStartFrame?: number;
   heroNoteEndFrame?: number;
+  light?: boolean;
 }
 
 /**
@@ -609,12 +646,15 @@ export function drawCleanIndexCard(
 ): void {
   if (localF < enterFrame) return;
 
+  const light = Boolean(options?.light);
   const p = getCardEnterProgress(localF, enterFrame, 16);
   const e = easeOutCubic(p);
   const heroShapeNote = options?.heroShapeNote;
   const isHero = Boolean(heroShapeNote);
   const isPos = item.changePct >= 0;
-  const pctColor = options?.accentColorOverride ?? (isPos ? '#F87171' : item.color);
+  const pctColor =
+    options?.accentColorOverride ??
+    (light ? (isPos ? '#DC2626' : '#059669') : isPos ? '#F87171' : item.color);
 
   ctx.save();
   ctx.globalAlpha = clamp(p * 1.6, 0, 1);
@@ -623,7 +663,19 @@ export function drawCleanIndexCard(
   else if (slideFrom === 'bottom') ctx.translate(0, lerp(90, 0, e));
   else ctx.translate(0, lerp(-50, 0, e));
 
-  if (isHero) {
+  if (light) {
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.08)';
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 6;
+    if (isHero) {
+      const heroBg = ctx.createLinearGradient(x, y, x + w, y + h);
+      heroBg.addColorStop(0, '#FFFBEB');
+      heroBg.addColorStop(1, '#FEF3C7');
+      ctx.fillStyle = heroBg;
+    } else {
+      ctx.fillStyle = '#FFFFFF';
+    }
+  } else if (isHero) {
     const heroBg = ctx.createLinearGradient(x, y, x + w, y + h);
     heroBg.addColorStop(0, 'rgba(251, 191, 36, 0.16)');
     heroBg.addColorStop(1, 'rgba(251, 191, 36, 0.04)');
@@ -633,12 +685,20 @@ export function drawCleanIndexCard(
   }
   roundRect(ctx, x, y, w, h, isHero ? 18 : 14);
   ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
 
-  ctx.strokeStyle = isHero
-    ? 'rgba(251, 191, 36, 0.65)'
-    : p < 0.9
-      ? pctColor
-      : 'rgba(255, 255, 255, 0.12)';
+  ctx.strokeStyle = light
+    ? isHero
+      ? 'rgba(217, 119, 6, 0.65)'
+      : p < 0.9
+        ? pctColor
+        : '#CBD5E1'
+    : isHero
+      ? 'rgba(251, 191, 36, 0.65)'
+      : p < 0.9
+        ? pctColor
+        : 'rgba(255, 255, 255, 0.12)';
   ctx.lineWidth = isHero ? 2.5 : p < 0.9 ? 2.2 : 1.3;
   ctx.stroke();
 
@@ -651,7 +711,7 @@ export function drawCleanIndexCard(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.font = `900 ${isHero ? 44 : 31}px ${FONT}`;
-  ctx.fillStyle = isHero ? '#FEF3C7' : '#F8FAFC';
+  ctx.fillStyle = light ? (isHero ? '#78350F' : '#0F172A') : isHero ? '#FEF3C7' : '#F8FAFC';
   ctx.fillText(item.name, x + (isHero ? 30 : 20), y + (isHero ? 52 : 40));
 
   const valT = easeOutCubic(clamp((localF - enterFrame) / 18, 0, 1));
@@ -681,8 +741,9 @@ export function drawCleanIndexCard(
     chartH,
     item.dailyCandles,
     todayCandleT,
-    isHero ? '#FDE68A' : '#94A3B8',
-    isHero
+    light ? (isHero ? '#92400E' : '#475569') : isHero ? '#FDE68A' : '#94A3B8',
+    isHero,
+    light
   );
 
   drawMiniIntradayChart(
@@ -696,8 +757,9 @@ export function drawCleanIndexCard(
     pctColor,
     intraDrawT,
     loopPhase,
-    isHero ? '#FDE68A' : '#94A3B8',
-    isHero
+    light ? (isHero ? '#92400E' : '#475569') : isHero ? '#FDE68A' : '#94A3B8',
+    isHero,
+    light
   );
 
   if (heroShapeNote) {
@@ -707,7 +769,7 @@ export function drawCleanIndexCard(
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.font = `800 29px ${FONT}`;
-    ctx.fillStyle = '#FDE68A';
+    ctx.fillStyle = light ? '#92400E' : '#FDE68A';
     const caret = noteRes.typing && Math.floor(localF / 7) % 2 === 0 ? ' ▌' : '';
     ctx.fillText(noteRes.visible + caret, x + 28, y + h - 42);
   }
@@ -733,7 +795,8 @@ export function drawTypewriterSummaryStrip(
   typeEndFrame: number,
   titleSize: number,
   bodySize: number,
-  holdPauseUntilFrame?: number
+  holdPauseUntilFrame?: number,
+  light = false
 ): void {
   if (localF < titleFrame) return;
 
@@ -748,10 +811,19 @@ export function drawTypewriterSummaryStrip(
 
   ctx.save();
   ctx.globalAlpha = enterT;
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+  if (light) {
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.06)';
+    ctx.shadowBlur = 12;
+    ctx.shadowOffsetY = 4;
+    ctx.fillStyle = '#F8FAFC';
+  } else {
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+  }
   roundRect(ctx, x, y, w, h, 12);
   ctx.fill();
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = light ? '#CBD5E1' : 'rgba(255, 255, 255, 0.1)';
   ctx.lineWidth = 1;
   ctx.stroke();
 
@@ -767,7 +839,7 @@ export function drawTypewriterSummaryStrip(
 
   if (localF >= typeStartFrame) {
     ctx.font = `600 ${bodySize}px ${FONT}`;
-    ctx.fillStyle = '#E2E8F0';
+    ctx.fillStyle = light ? '#1E293B' : '#E2E8F0';
     drawWrappedText(
       ctx,
       typed.visible + caret,

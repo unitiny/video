@@ -5,6 +5,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import type {
+  AnimatedPosterStageData,
   CleanIndexChartItem,
   EpisodeManifest,
   EpisodeScene,
@@ -543,6 +544,77 @@ function validateVerdictScene(
   }
 }
 
+function validateAnimatedPosterScene(
+  scene: Extract<EpisodeScene, { kind: 'animated_poster_stage' }>,
+  errors: ValidationIssue[],
+  warnings: ValidationIssue[]
+): void {
+  const data: AnimatedPosterStageData = scene.data;
+  if (!data?.imageSrc || typeof data.imageSrc !== 'string') {
+    pushIssue(errors, warnings, {
+      severity: 'error',
+      code: 'POSTER_IMAGE_MISSING',
+      sceneId: scene.id,
+      field: 'data.imageSrc',
+      message: '动态海报分镜缺少有效的 imageSrc 图片路径',
+    });
+  }
+
+  const beats = Array.isArray(data?.beats) ? data.beats : [];
+  if (beats.length === 0) {
+    pushIssue(errors, warnings, {
+      severity: 'warning',
+      code: 'POSTER_BEATS_EMPTY',
+      sceneId: scene.id,
+      field: 'data.beats',
+      message: '动态海报分镜尚未配置局部聚光节拍 beats，将仅展示整图出入画',
+    });
+    return;
+  }
+
+  beats.forEach((beat, idx) => {
+    const fieldBase = `data.beats[${idx}]`;
+    if (
+      !Number.isFinite(beat.enterFrame) ||
+      !Number.isFinite(beat.exitFrame) ||
+      beat.enterFrame < 0 ||
+      beat.enterFrame >= beat.exitFrame ||
+      beat.exitFrame > scene.durationFrames
+    ) {
+      pushIssue(errors, warnings, {
+        severity: 'error',
+        code: 'POSTER_BEAT_FRAME_INVALID',
+        sceneId: scene.id,
+        field: fieldBase,
+        message: `海报节拍 ${beat.id || idx} 帧区间 [${beat.enterFrame}, ${beat.exitFrame}] 越界或倒挂（场景总帧数 ${scene.durationFrames}）`,
+      });
+    }
+
+    const c = beat.crop;
+    if (
+      !c ||
+      !Number.isFinite(c.x) ||
+      !Number.isFinite(c.y) ||
+      !Number.isFinite(c.w) ||
+      !Number.isFinite(c.h) ||
+      c.x < 0 ||
+      c.y < 0 ||
+      c.w <= 0 ||
+      c.h <= 0 ||
+      c.x + c.w > 1.001 ||
+      c.y + c.h > 1.001
+    ) {
+      pushIssue(errors, warnings, {
+        severity: 'error',
+        code: 'POSTER_BEAT_CROP_INVALID',
+        sceneId: scene.id,
+        field: `${fieldBase}.crop`,
+        message: `海报节拍 ${beat.id || idx} 的归一化裁剪框越界或宽高非正`,
+      });
+    }
+  });
+}
+
 function scanObjectForCompliance(
   value: unknown,
   fieldPath: string,
@@ -730,11 +802,12 @@ export function validateEpisodeManifest(
   }
 
   // Required scene kinds
-  const requiredKinds: EpisodeScene['kind'][] = [
-    'hook_live_video',
-    'market_chrono_board',
-    'verdict_scenario',
-  ];
+  const isPosterFlow =
+    Boolean(episode.metadata?.allowNoHook) ||
+    scenes.some((s) => s.kind === 'animated_poster_stage');
+  const requiredKinds: EpisodeScene['kind'][] = isPosterFlow
+    ? ['market_chrono_board']
+    : ['hook_live_video', 'market_chrono_board', 'verdict_scenario'];
   const presentKinds = new Set(scenes.map((s) => s.kind));
   for (const kind of requiredKinds) {
     if (!presentKinds.has(kind)) {
@@ -803,6 +876,8 @@ export function validateEpisodeManifest(
       validateMarketBoardScene(scene, errors, warnings);
     } else if (scene.kind === 'verdict_scenario') {
       validateVerdictScene(scene, errors, warnings);
+    } else if (scene.kind === 'animated_poster_stage') {
+      validateAnimatedPosterScene(scene, errors, warnings);
     }
   }
 

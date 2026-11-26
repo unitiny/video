@@ -5,6 +5,7 @@ import {
   getCompiledShotAtFrame,
   type CompiledEpisodeTimeline,
 } from '../timeline';
+import { renderAnimatedPosterStageScene } from './AnimatedPosterStageScene';
 import { renderEventDualSpotlightScene } from './EventDualSpotlightScene';
 import { renderEventFlowFunnelScene } from './EventFlowFunnelScene';
 import { renderEventTimelineScene } from './EventTimelineScene';
@@ -14,6 +15,7 @@ import { renderVerdictScenarioScene } from './VerdictScenarioScene';
 import type { SceneRenderContext } from './primitives';
 
 export * from './primitives';
+export { renderAnimatedPosterStageScene } from './AnimatedPosterStageScene';
 export { renderHookLiveVideoScene } from './HookLiveVideoScene';
 export { renderMarketChronoBoardScene } from './MarketChronoBoardScene';
 export { renderEventFlowFunnelScene } from './EventFlowFunnelScene';
@@ -94,6 +96,9 @@ export function renderEpisodeFrame(
       break;
     case 'verdict_scenario':
       renderVerdictScenarioScene(rc, scene.data);
+      break;
+    case 'animated_poster_stage':
+      renderAnimatedPosterStageScene(rc, scene.data);
       break;
   }
 }
