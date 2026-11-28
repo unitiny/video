@@ -11,6 +11,7 @@ import type {
   EpisodeScene,
   HookSceneData,
   MarketBoardSceneData,
+  TextSummaryBoardData,
   VerdictScenarioData,
 } from '../src/video/engine/schema.ts';
 import {
@@ -615,6 +616,41 @@ function validateAnimatedPosterScene(
   });
 }
 
+function validateTextSummaryScene(
+  scene: Extract<EpisodeScene, { kind: 'text_summary_board' }>,
+  errors: ValidationIssue[],
+  warnings: ValidationIssue[]
+): void {
+  const data: TextSummaryBoardData = scene.data;
+  const sections = Array.isArray(data?.sections) ? data.sections : [];
+  if (sections.length === 0) {
+    pushIssue(errors, warnings, {
+      severity: 'error',
+      code: 'TEXT_SUMMARY_SECTIONS_EMPTY',
+      sceneId: scene.id,
+      field: 'data.sections',
+      message: '纯文字汇总分页缺少至少一个板块 sections',
+    });
+    return;
+  }
+
+  sections.forEach((sec, idx) => {
+    const hasContent =
+      (Array.isArray(sec.rows) && sec.rows.length > 0) ||
+      (Array.isArray(sec.bullets) && sec.bullets.length > 0) ||
+      Boolean(sec.analysis);
+    if (!hasContent) {
+      pushIssue(errors, warnings, {
+        severity: 'error',
+        code: 'TEXT_SUMMARY_SECTION_EMPTY',
+        sceneId: scene.id,
+        field: `data.sections[${idx}]`,
+        message: `汇总板块「${sec.title || sec.id}」缺少 rows / bullets / analysis 文案内容`,
+      });
+    }
+  });
+}
+
 function scanObjectForCompliance(
   value: unknown,
   fieldPath: string,
@@ -878,6 +914,8 @@ export function validateEpisodeManifest(
       validateVerdictScene(scene, errors, warnings);
     } else if (scene.kind === 'animated_poster_stage') {
       validateAnimatedPosterScene(scene, errors, warnings);
+    } else if (scene.kind === 'text_summary_board') {
+      validateTextSummaryScene(scene, errors, warnings);
     }
   }
 

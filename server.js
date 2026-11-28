@@ -1,10 +1,10 @@
 // server.ts
 import express from "express";
-import fs from "fs";
-import path from "path";
-import os from "os";
+import fs3 from "fs";
+import path3 from "path";
+import os2 from "os";
 import crypto from "crypto";
-import { execFile, spawnSync } from "child_process";
+import { execFile, spawnSync as spawnSync2 } from "child_process";
 import { promisify } from "util";
 import { GoogleGenAI } from "@google/genai";
 
@@ -1705,12 +1705,14 @@ function synthesizeCinemaImpactAudioPcm(episode, sampleRate = 44100) {
     } else if (shot.scene.kind === "market_chrono_board") {
       shotRanges.push({ start: sStart, end: sEnd, energy: 0.96, fullDrums: true });
       const timing = resolveMarketBoardTiming(shot.scene.data.timing);
-      typeWindows.push(
-        [(base + timing.usTypeStart) / fps, (base + timing.usTypeEnd) / fps],
-        [(base + timing.asiaTypeStart) / fps, (base + timing.asiaTypeEnd) / fps],
-        [(base + timing.commodityTypeStart) / fps, (base + timing.commodityTypeEnd) / fps],
-        [(base + timing.a50NoteStart) / fps, (base + timing.a50NoteEnd) / fps]
-      );
+      if (!shot.scene.data.safeInset) {
+        typeWindows.push(
+          [(base + timing.usTypeStart) / fps, (base + timing.usTypeEnd) / fps],
+          [(base + timing.asiaTypeStart) / fps, (base + timing.asiaTypeEnd) / fps],
+          [(base + timing.commodityTypeStart) / fps, (base + timing.commodityTypeEnd) / fps],
+          [(base + timing.a50NoteStart) / fps, (base + timing.a50NoteEnd) / fps]
+        );
+      }
       chimeEvents.push(
         { t: (base + timing.usStart + 3) / fps, freq: 523.25, gain: 0.16 },
         { t: (base + timing.asiaStart + 2) / fps, freq: 587.33, gain: 0.16 },
@@ -1769,6 +1771,13 @@ function synthesizeCinemaImpactAudioPcm(episode, sampleRate = 44100) {
           chimeEvents.push({ t: (base + b.enterFrame) / fps, freq: 523.25 + idx * 80, gain: 0.16 });
         });
       }
+    } else if (shot.scene.kind === "text_summary_board") {
+      shotRanges.push({ start: sStart, end: sEnd, energy: 0.85, fullDrums: true });
+      whooshEvents.push({ t: (base + 1) / fps, pitch: 820 });
+      chimeEvents.push(
+        { t: (base + 4) / fps, freq: 587.33, gain: 0.18 },
+        { t: (base + 9) / fps, freq: 880, gain: 0.2 }
+      );
     } else {
       shotRanges.push({ start: sStart, end: sEnd, energy: 1, fullDrums: true });
     }
@@ -2286,13 +2295,859 @@ function mixVoiceoverIntoStereoPcm(bgm, voiceMono, voiceSampleRate, duckingDb = 
   };
 }
 
+// src/server/mobileTunnel.ts
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { spawn, spawnSync } from "child_process";
+var CLOUDFLARED_RELEASE_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64";
+var TRYCLOUDFLARE_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
+var MobileTunnelManager = class {
+  constructor() {
+    this.proc = null;
+    this.status = "idle";
+    this.url = null;
+    this.verified = false;
+    this.statusCode = 0;
+    this.error = null;
+    this.startedAt = null;
+    this.startPromise = null;
+    this.registered = false;
+    this.port = 3e3;
+    this.exitHookInstalled = false;
+  }
+  getSnapshot() {
+    return {
+      status: this.status,
+      url: this.url,
+      verified: this.verified,
+      statusCode: this.statusCode,
+      error: this.error,
+      startedAt: this.startedAt,
+      provider: "cloudflare_quick_tunnel"
+    };
+  }
+  installExitHooks() {
+    if (this.exitHookInstalled) return;
+    this.exitHookInstalled = true;
+    const cleanup = () => {
+      this.killProcessOnly();
+    };
+    process.once("exit", cleanup);
+    process.once("SIGINT", () => {
+      cleanup();
+      process.exit(0);
+    });
+    process.once("SIGTERM", () => {
+      cleanup();
+      process.exit(0);
+    });
+  }
+  killProcessOnly() {
+    if (this.proc) {
+      try {
+        this.proc.kill("SIGTERM");
+      } catch {
+      }
+      this.proc = null;
+    }
+  }
+  stop() {
+    this.killProcessOnly();
+    this.status = "idle";
+    this.url = null;
+    this.verified = false;
+    this.statusCode = 0;
+    this.error = null;
+    this.startedAt = null;
+    this.registered = false;
+    this.startPromise = null;
+    return this.getSnapshot();
+  }
+  probeBinary(candidate) {
+    try {
+      const res = spawnSync(candidate, ["--version"], {
+        stdio: "ignore",
+        timeout: 4e3
+      });
+      return !res.error && res.status === 0;
+    } catch {
+      return false;
+    }
+  }
+  async ensureCloudflaredBinary() {
+    const cachedBin = path.join(os.tmpdir(), "quantreel-cloudflared");
+    const preDownloaded = "/tmp/cf_bin/cloudflared";
+    const candidates = [
+      process.env.CLOUDFLARED_PATH?.trim(),
+      cachedBin,
+      preDownloaded,
+      "cloudflared",
+      "/usr/local/bin/cloudflared",
+      "/usr/bin/cloudflared"
+    ].filter((c) => Boolean(c));
+    for (const candidate of candidates) {
+      if (this.probeBinary(candidate)) {
+        return candidate;
+      }
+    }
+    if (process.platform !== "linux" || process.arch !== "x64") {
+      throw new Error(
+        `\u5F53\u524D\u7CFB\u7EDF (${process.platform}/${process.arch}) \u672A\u9884\u88C5 cloudflared\uFF0C\u8BF7\u624B\u52A8\u5B89\u88C5\u6216\u586B\u5199\u81EA\u5B9A\u4E49\u516C\u7F51\u57DF\u540D\u3002`
+      );
+    }
+    const tmpDownload = `${cachedBin}.${Date.now()}.tmp`;
+    const res = await fetch(CLOUDFLARED_RELEASE_URL, { redirect: "follow" });
+    if (!res.ok) {
+      throw new Error(`\u4E0B\u8F7D cloudflared \u5931\u8D25 (HTTP ${res.status})`);
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    fs.writeFileSync(tmpDownload, buf, { mode: 493 });
+    fs.renameSync(tmpDownload, cachedBin);
+    fs.chmodSync(cachedBin, 493);
+    if (!this.probeBinary(cachedBin)) {
+      throw new Error("\u4E0B\u8F7D\u7684 cloudflared \u53EF\u6267\u884C\u6587\u4EF6\u6821\u9A8C\u5931\u8D25");
+    }
+    return cachedBin;
+  }
+  async verifyPublicUrl(targetUrl) {
+    await new Promise((r) => setTimeout(r, 2500));
+    for (let attempt = 0; attempt < 10; attempt++) {
+      if (!this.proc || this.url !== targetUrl) {
+        return { ok: false, statusCode: 0 };
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5e3);
+      try {
+        const res = await fetch(`${targetUrl}/api/health`, {
+          method: "GET",
+          redirect: "manual",
+          signal: controller.signal
+        });
+        if (res.status === 200) {
+          return { ok: true, statusCode: 200 };
+        }
+        if (attempt === 9) {
+          return { ok: false, statusCode: res.status };
+        }
+      } catch {
+      } finally {
+        clearTimeout(timer);
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    return { ok: false, statusCode: 0 };
+  }
+  async start(port, force = false) {
+    this.port = port;
+    this.installExitHooks();
+    if (!force) {
+      if (this.status === "ready" && this.proc && this.url) {
+        return this.getSnapshot();
+      }
+      if (this.startPromise) {
+        return this.startPromise;
+      }
+    } else {
+      this.stop();
+    }
+    this.status = "starting";
+    this.error = null;
+    this.verified = false;
+    this.statusCode = 0;
+    this.registered = false;
+    const run = (async () => {
+      try {
+        const binary = await this.ensureCloudflaredBinary();
+        const child = spawn(
+          binary,
+          [
+            "tunnel",
+            "--no-autoupdate",
+            "--protocol",
+            "http2",
+            "--url",
+            `http://127.0.0.1:${port}`
+          ],
+          {
+            stdio: ["ignore", "pipe", "pipe"]
+          }
+        );
+        this.proc = child;
+        this.startedAt = Date.now();
+        let issuedUrl = null;
+        await new Promise((resolve, reject) => {
+          let settled = false;
+          const finishOk = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve();
+          };
+          const finishErr = (msg) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            reject(new Error(msg));
+          };
+          const timeout = setTimeout(() => {
+            if (issuedUrl) {
+              finishOk();
+            } else {
+              finishErr("\u5EFA\u7ACB\u514D\u8D39\u516C\u7F51\u901A\u9053\u8D85\u65F6\uFF0825\u79D2\uFF09\uFF0C\u8BF7\u70B9\u51FB\u5237\u65B0\u91CD\u8BD5");
+            }
+          }, 25e3);
+          const handleLogChunk = (chunk) => {
+            const text = chunk.toString("utf8");
+            if (!issuedUrl) {
+              const m = TRYCLOUDFLARE_RE.exec(text);
+              if (m) {
+                issuedUrl = m[0];
+                this.url = issuedUrl;
+              }
+            }
+            if (text.includes("Registered tunnel connection")) {
+              this.registered = true;
+              if (issuedUrl) {
+                finishOk();
+              }
+            }
+          };
+          child.stdout?.on("data", handleLogChunk);
+          child.stderr?.on("data", handleLogChunk);
+          child.once("error", (err) => {
+            finishErr(`\u542F\u52A8\u516C\u7F51\u901A\u9053\u5931\u8D25: ${err.message}`);
+          });
+          child.once("exit", (code, signal) => {
+            if (this.proc === child) {
+              this.proc = null;
+              if (!settled) {
+                finishErr(
+                  `\u516C\u7F51\u901A\u9053\u8FDB\u7A0B\u63D0\u524D\u9000\u51FA (code=${code ?? "null"}, signal=${signal ?? "null"})`
+                );
+              } else if (this.status === "ready") {
+                this.status = "error";
+                this.verified = false;
+                this.error = "\u516C\u7F51\u901A\u9053\u5DF2\u65AD\u5F00\uFF0C\u70B9\u51FB\u300C\u5237\u65B0\u901A\u9053\u300D\u53EF\u7ACB\u523B\u91CD\u8FDE";
+              }
+            }
+          });
+        });
+        if (!issuedUrl || this.proc !== child) {
+          throw new Error("\u672A\u80FD\u83B7\u53D6\u514D\u8D39\u516C\u7F51\u9884\u89C8\u57DF\u540D");
+        }
+        const verify = await this.verifyPublicUrl(issuedUrl);
+        if (this.proc !== child) {
+          return this.getSnapshot();
+        }
+        this.statusCode = verify.statusCode;
+        this.verified = verify.ok;
+        this.status = "ready";
+        if (!verify.ok) {
+          this.error = "\u516C\u7F51\u57DF\u540D\u5DF2\u5206\u914D\uFF0CDNS \u4ECD\u5728\u540C\u6B65\u4E2D\uFF0C\u51E0\u79D2\u540E\u53EF\u81EA\u52A8\u751F\u6548";
+        }
+        console.log(
+          `[MobileTunnel] Free public preview ready: ${issuedUrl} (verified=${verify.ok}, http=${verify.statusCode})`
+        );
+        return this.getSnapshot();
+      } catch (err) {
+        this.killProcessOnly();
+        this.status = "error";
+        this.url = null;
+        this.verified = false;
+        this.statusCode = 0;
+        this.error = err instanceof Error ? err.message : "\u514D\u8D39\u516C\u7F51\u901A\u9053\u542F\u52A8\u5931\u8D25";
+        return this.getSnapshot();
+      } finally {
+        this.startPromise = null;
+      }
+    })();
+    this.startPromise = run;
+    return run;
+  }
+};
+var mobileTunnel = new MobileTunnelManager();
+
+// src/server/cloudVideoShare.ts
+import fs2 from "fs";
+import path2 from "path";
+var CHANNEL_ORDER = {
+  droptocdn_mp4: 0,
+  uguu_mp4: 1,
+  x0_mp4: 2
+};
+var bundleCache = /* @__PURE__ */ new Map();
+var inFlightPublishes = /* @__PURE__ */ new Map();
+function getSidecarPath(mp4Path) {
+  const dir = path2.dirname(mp4Path);
+  const base = path2.basename(mp4Path, path2.extname(mp4Path));
+  return path2.join(dir, `${base}.cloud.json`);
+}
+function isSupportedChannelId(id) {
+  return id === "droptocdn_mp4" || id === "uguu_mp4" || id === "x0_mp4";
+}
+function filterFreshChannels(channels) {
+  const now = Date.now();
+  const seen = /* @__PURE__ */ new Set();
+  const fresh = [];
+  for (const ch of channels) {
+    if (!ch || !ch.url || !isSupportedChannelId(ch.id) || seen.has(ch.id)) continue;
+    if (typeof ch.expiresAtMs === "number" && ch.expiresAtMs <= now) continue;
+    seen.add(ch.id);
+    fresh.push(ch);
+  }
+  fresh.sort((a, b) => (CHANNEL_ORDER[a.id] ?? 9) - (CHANNEL_ORDER[b.id] ?? 9));
+  return fresh;
+}
+function saveSidecarBundle(mp4Path, bundle) {
+  try {
+    const sidecar = getSidecarPath(mp4Path);
+    fs2.writeFileSync(sidecar, JSON.stringify(bundle, null, 2), "utf-8");
+  } catch {
+  }
+}
+function loadSidecarBundle(mp4Path, expectedMtimeMs) {
+  try {
+    const sidecar = getSidecarPath(mp4Path);
+    if (!fs2.existsSync(sidecar)) return null;
+    const parsed = JSON.parse(fs2.readFileSync(sidecar, "utf-8"));
+    if (!parsed || Math.floor(parsed.mtimeMs) !== Math.floor(expectedMtimeMs)) {
+      return null;
+    }
+    const fresh = filterFreshChannels(Array.isArray(parsed.channels) ? parsed.channels : []);
+    if (fresh.length === 0) return null;
+    return {
+      ...parsed,
+      channels: fresh
+    };
+  } catch {
+    return null;
+  }
+}
+var MOBILE_VERIFY_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+var droptocdnCooldownUntilMs = 0;
+async function verifyDirectMp4Stream(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3500);
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      headers: {
+        "User-Agent": MOBILE_VERIFY_UA,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        Range: "bytes=0-65535"
+      },
+      signal: controller.signal
+    });
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    const cd = (res.headers.get("content-disposition") || "").toLowerCase();
+    if (cd.includes("attachment")) {
+      return false;
+    }
+    await res.arrayBuffer();
+    return (res.status === 206 || res.status === 200) && ct.includes("video/");
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function uploadToDropToCdn(fileBuf, filename) {
+  if (Date.now() < droptocdnCooldownUntilMs) {
+    throw new Error("Cloudflare \u533F\u540D\u76F4\u94FE\u4ECA\u65E5\u914D\u989D\u51B7\u5374\u4E2D\uFF0C\u79D2\u5207\u5907\u7528\u76F4\u94FE");
+  }
+  if (fileBuf.length > 15.8 * 1024 * 1024) {
+    throw new Error("\u6587\u4EF6\u8D85\u8FC7 16MB \u533F\u540D\u76F4\u94FE\u4E0A\u9650\uFF0C\u81EA\u52A8\u5207\u6362\u5907\u7528\u76F4\u94FE");
+  }
+  const form = new FormData();
+  form.append("file", new Blob([new Uint8Array(fileBuf)], { type: "video/mp4" }), filename);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 9e3);
+  try {
+    const res = await fetch("https://api.droptocdn.com/v1/files", {
+      method: "POST",
+      body: form,
+      signal: controller.signal
+    });
+    if (res.status === 429) {
+      droptocdnCooldownUntilMs = Date.now() + 30 * 60 * 1e3;
+      throw new Error("Cloudflare \u533F\u540D\u8282\u70B9\u4ECA\u65E5\u8BBF\u5BA2\u989D\u5EA6\u5DF2\u6EE1\uFF0C\u81EA\u52A8\u79D2\u5207\u5907\u7528\u76F4\u94FE");
+    }
+    const json = await res.json();
+    const url = json?.url?.trim();
+    if (!res.ok || !url || !url.startsWith("https://")) {
+      throw new Error(`Cloudflare \u76F4\u94FE\u4E0A\u4F20\u5F02\u5E38 (${res.status})`);
+    }
+    const verified = await verifyDirectMp4Stream(url);
+    if (!verified) {
+      throw new Error("Cloudflare \u76F4\u94FE MP4 206 \u6D41\u6821\u9A8C\u672A\u901A\u8FC7");
+    }
+    const parsedExp = json.expires_at ? Date.parse(json.expires_at) : NaN;
+    const expiresAtMs = Number.isFinite(parsedExp) && parsedExp > Date.now() ? parsedExp - 3600 * 1e3 : Date.now() + 6 * 24 * 3600 * 1e3;
+    return {
+      id: "droptocdn_mp4",
+      label: "\u7EBF\u8DEF 1\uFF1ACloudflare \u6781\u901F\u7EAF MP4 \u76F4\u94FE\uFF08\u63A8\u8350 \xB7 \u79D2\u5F00\u4E0D\u5361\u987F\uFF09",
+      shortLabel: "\u7EBF\u8DEF1 \xB7 \u6781\u901F\u76F4\u94FE",
+      url,
+      description: "\u76F4\u8FDE Cloudflare \u4E9A\u592A\u8FB9\u7F18\u8282\u70B9\u7684\u7EAF MP4 \u89C6\u9891\u6D41\uFF08\u65E0\u4EFB\u4F55\u8DF3\u8F6C\u7F51\u9875\u4E0E\u5E73\u53F0\u754C\u9762\uFF09\uFF0C\u626B\u7801\u76F4\u63A5\u62C9\u8D77\u624B\u673A\u539F\u751F\u5168\u5C4F\u64AD\u653E\u5668\u5E76\u9AD8\u901F\u9884\u7F13\u51B2\u3002",
+      verified: true,
+      expiresHint: "7 \u5929\u6709\u6548 \xB7 \u7EAFMP4\u76F4\u64AD",
+      providerName: "cdn.droptocdn.com",
+      expiresAtMs
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function uploadToUguu(fileBuf, filename) {
+  const form = new FormData();
+  form.append("files[]", new Blob([new Uint8Array(fileBuf)], { type: "video/mp4" }), filename);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 14e3);
+  try {
+    const res = await fetch("https://uguu.se/upload", {
+      method: "POST",
+      body: form,
+      signal: controller.signal
+    });
+    const json = await res.json();
+    const url = json?.files?.[0]?.url?.trim();
+    if (!res.ok || !json?.success || !url || !url.startsWith("https://")) {
+      throw new Error(`uguu.se \u4E0A\u4F20\u5931\u8D25 (${res.status})`);
+    }
+    const verified = await verifyDirectMp4Stream(url);
+    if (!verified) {
+      throw new Error("uguu.se \u76F4\u94FE MP4 206 \u6D41\u6821\u9A8C\u672A\u901A\u8FC7");
+    }
+    return {
+      id: "uguu_mp4",
+      label: "\u7EBF\u8DEF 2\uFF1A\u5907\u7528\u7EAF MP4 \u76F4\u94FE\uFF08uguu.se\uFF09",
+      shortLabel: "\u7EBF\u8DEF2 \xB7 \u5907\u7528\u76F4\u94FE",
+      url,
+      description: "\u72EC\u7ACB\u7EAF MP4 \u89C6\u9891\u6D41\u76F4\u94FE\uFF08HTTP 206\uFF09\uFF0C\u4E0D\u8DF3\u8F6C\u4EFB\u4F55\u7B2C\u4E09\u65B9\u7F51\u9875\uFF0C\u9002\u5408\u4F5C\u4E3A\u7EBF\u8DEF 1 \u7684\u5907\u7528\u626B\u7801\u901A\u9053\u3002",
+      verified: true,
+      expiresHint: "3 \u5C0F\u65F6\u6709\u6548 \xB7 \u7EAFMP4\u76F4\u64AD",
+      providerName: "uguu.se",
+      expiresAtMs: Date.now() + 2.5 * 3600 * 1e3
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function uploadToX0(fileBuf, filename) {
+  const form = new FormData();
+  form.append("file", new Blob([new Uint8Array(fileBuf)], { type: "video/mp4" }), filename);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 16e3);
+  try {
+    const res = await fetch("https://x0.at/", {
+      method: "POST",
+      body: form,
+      signal: controller.signal
+    });
+    const url = (await res.text()).trim();
+    if (!res.ok || !url.startsWith("https://x0.at/")) {
+      throw new Error(`x0.at \u4E0A\u4F20\u8FD4\u56DE\u5F02\u5E38 (${res.status}): ${url.slice(0, 80)}`);
+    }
+    const verified = await verifyDirectMp4Stream(url);
+    if (!verified) {
+      throw new Error("x0.at \u76F4\u94FE MP4 206 \u6D41\u6821\u9A8C\u672A\u901A\u8FC7");
+    }
+    return {
+      id: "x0_mp4",
+      label: "\u7EBF\u8DEF 3\uFF1A\u6781\u77ED\u7801\u7EAF MP4 \u76F4\u94FE\uFF08x0.at\uFF09",
+      shortLabel: "\u7EBF\u8DEF3 \xB7 \u6781\u77ED\u76F4\u94FE",
+      url,
+      description: "\u6781\u77ED\u94FE\u63A5\u7EAF MP4 \u89C6\u9891\u6D41\uFF08HTTP 206 inline\uFF09\uFF0C\u4E0D\u8DF3\u8F6C\u4EFB\u4F55\u5E73\u53F0\u9875\u9762\uFF0C\u9002\u5408\u4F5C\u4E3A\u7B2C\u4E8C\u5907\u7528\u76F4\u94FE\u3002",
+      verified: true,
+      expiresHint: "3~30 \u5929\u6709\u6548 \xB7 \u7EAFMP4\u76F4\u64AD",
+      providerName: "x0.at",
+      expiresAtMs: Date.now() + 48 * 3600 * 1e3
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function warmCloudUploaders() {
+}
+function getCachedCloudShareBundle(key, mtimeMs, mp4Path) {
+  const cached = bundleCache.get(key);
+  if (cached && Math.floor(cached.mtimeMs) === Math.floor(mtimeMs)) {
+    const fresh = filterFreshChannels(cached.channels);
+    if (fresh.length > 0) {
+      return { ...cached, channels: fresh };
+    }
+  }
+  if (mp4Path) {
+    const fromDisk = loadSidecarBundle(mp4Path, mtimeMs);
+    if (fromDisk) {
+      bundleCache.set(key, fromDisk);
+      return fromDisk;
+    }
+  }
+  return null;
+}
+async function publishMp4ToCloudChannels(key, mp4Path, force = false, fastFirst = true) {
+  const stat = fs2.statSync(mp4Path);
+  if (!force) {
+    const cached = getCachedCloudShareBundle(key, stat.mtimeMs, mp4Path);
+    if (cached && cached.channels.length > 0) {
+      return cached;
+    }
+  }
+  const inflightKey = `${key}:${Math.floor(stat.mtimeMs)}`;
+  if (!force) {
+    const existing = inFlightPublishes.get(inflightKey);
+    if (existing) return existing;
+  }
+  const runPromise = (async () => {
+    const fileBuf = fs2.readFileSync(mp4Path);
+    const filename = `${key}_1080p.mp4`;
+    const uploadedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const collectedChannels = [];
+    const collectedErrors = {};
+    const orderedProviders = [
+      { id: "droptocdn_mp4", upload: () => uploadToDropToCdn(fileBuf, filename) },
+      { id: "uguu_mp4", upload: () => uploadToUguu(fileBuf, filename) },
+      { id: "x0_mp4", upload: () => uploadToX0(fileBuf, filename) }
+    ];
+    const syncCache = (pendingBackups) => {
+      const snapshot = {
+        key,
+        mtimeMs: stat.mtimeMs,
+        uploadedAt,
+        channels: filterFreshChannels(collectedChannels),
+        errors: { ...collectedErrors },
+        pendingBackups
+      };
+      if (snapshot.channels.length > 0) {
+        bundleCache.set(key, snapshot);
+        saveSidecarBundle(mp4Path, snapshot);
+      }
+      return snapshot;
+    };
+    let nextIdx = 0;
+    while (nextIdx < orderedProviders.length) {
+      const prov = orderedProviders[nextIdx++];
+      try {
+        const ch = await prov.upload();
+        collectedChannels.push(ch);
+        if (fastFirst) {
+          const hasRemaining = nextIdx < orderedProviders.length;
+          const firstSnap = syncCache(hasRemaining);
+          if (hasRemaining) {
+            void (async () => {
+              for (let i = nextIdx; i < orderedProviders.length; i++) {
+                const backup = orderedProviders[i];
+                try {
+                  const bch = await backup.upload();
+                  collectedChannels.push(bch);
+                } catch (err) {
+                  collectedErrors[backup.id] = err instanceof Error ? err.message : String(err);
+                }
+                syncCache(i + 1 < orderedProviders.length);
+              }
+              inFlightPublishes.delete(inflightKey);
+              syncCache(false);
+            })();
+          } else {
+            inFlightPublishes.delete(inflightKey);
+          }
+          return firstSnap;
+        }
+      } catch (err) {
+        collectedErrors[prov.id] = err instanceof Error ? err.message : String(err);
+      }
+    }
+    inFlightPublishes.delete(inflightKey);
+    const finalBundle = syncCache(false);
+    if (finalBundle.channels.length === 0) {
+      throw new Error(
+        `\u76F4\u94FE MP4 \u53D1\u5E03\u5931\u8D25\uFF1A${Object.entries(finalBundle.errors).map(([k, v]) => `${k}: ${v}`).join("\uFF1B")}`
+      );
+    }
+    return finalBundle;
+  })();
+  inFlightPublishes.set(inflightKey, runPromise);
+  return runPromise;
+}
+
+// src/server/mobilePlayerHtml.ts
+function escapeHtml(input) {
+  return input.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function renderStandaloneMobilePlayerHtml(opts) {
+  const safeTitle = escapeHtml(opts.title);
+  const safeVideoUrl = escapeHtml(opts.videoUrl);
+  const safeDownloadUrl = escapeHtml(opts.downloadUrl);
+  const fps = Math.max(1, Math.round(opts.fps || 30));
+  const sizeMb = (opts.sizeBytes / (1024 * 1024)).toFixed(2);
+  const resTag = opts.width && opts.height ? `${opts.width}\xD7${opts.height} \xB7 ` : "";
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#000000" />
+  <title>${safeTitle} \u2014 \u5168\u5C4F\u5BA1\u7247</title>
+  <style>
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
+    html,body{width:100%;height:100%;background:#000;color:#fff;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;user-select:none}
+    .stage{position:fixed;inset:0;width:100vw;height:100dvh;background:#000;overflow:hidden}
+    video{width:100%;height:100%;display:block;object-fit:cover;background:#000}
+    video.contain{object-fit:contain}
+    .overlay{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center}
+    .overlay.hide{display:none}
+    .play-big{width:80px;height:80px;border-radius:999px;border:none;background:#fff;color:#0a0a0a;font-size:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 12px 32px rgba(0,0,0,.55);padding-left:5px}
+    .play-big:active{transform:scale(.94)}
+    .ov-title{font-size:16px;font-weight:700;text-shadow:0 2px 10px rgba(0,0,0,.8)}
+    .ov-sub{font-size:12px;color:#fcd34d}
+    .ov-note{font-size:11px;color:rgba(255,255,255,.7)}
+    .top-bar{position:fixed;left:0;right:0;top:0;z-index:15;padding:max(12px,env(safe-area-inset-top)) 14px 26px;background:linear-gradient(to bottom,rgba(0,0,0,.78),rgba(0,0,0,0));display:flex;align-items:center;justify-content:space-between;gap:10px;pointer-events:none;transition:opacity .2s}
+    .top-title{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .frame-pill{font-size:11px;font-variant-numeric:tabular-nums;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.18);padding:4px 8px;border-radius:8px;white-space:nowrap}
+    .hud{position:fixed;left:0;right:0;bottom:0;z-index:15;padding:28px 14px max(14px,env(safe-area-inset-bottom));background:linear-gradient(to top,rgba(0,0,0,.92),rgba(0,0,0,.7) 65%,rgba(0,0,0,0));display:flex;flex-direction:column;gap:10px;transition:opacity .2s}
+    .hud.hide,.top-bar.hide{opacity:0;pointer-events:none}
+    .scrub-row{display:flex;align-items:center;gap:8px}
+    .time-txt{font-size:11px;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.9);width:44px;flex-shrink:0}
+    .time-txt.r{text-align:right;color:rgba(255,255,255,.65)}
+    input[type=range]{flex:1;accent-color:#fbbf24;height:6px;cursor:pointer}
+    .btn-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px}
+    .grp{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+    .btn{border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.12);color:#fff;border-radius:999px;padding:7px 11px;font-size:12px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
+    .btn:active{background:rgba(255,255,255,.25)}
+    .btn.primary{background:#fff;color:#0a0a0a;border-color:#fff;padding:7px 14px;font-weight:700}
+    .btn.gold{background:#fbbf24;color:#0a0a0a;border-color:#fbbf24;font-weight:700}
+    .btn.on{background:rgba(16,185,129,.35);border-color:#34d399;color:#d1fae5}
+    .safe-zone{position:fixed;inset:0;z-index:10;pointer-events:none;display:none}
+    .safe-zone.show{display:block}
+    .sz-top{position:absolute;top:0;left:0;right:0;height:5.6%;background:rgba(239,68,68,.24);border-bottom:1px dashed #f87171;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fee2e2}
+    .sz-bot{position:absolute;bottom:0;left:0;right:0;height:17.7%;background:rgba(239,68,68,.24);border-top:1px dashed #f87171;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fee2e2}
+    .sz-right{position:absolute;right:0;top:44.8%;bottom:17.7%;width:13.3%;background:rgba(249,115,22,.24);border-left:1px dashed #fb923c;display:flex;flex-direction:column;align-items:center;justify-content:space-around;padding:12px 0}
+    .sz-dot{width:28px;height:28px;border-radius:999px;background:rgba(0,0,0,.6);border:1px solid #fdba74;color:#ffedd5;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+    .hint{font-size:11px;color:#fcd34d;text-align:center;display:none}
+    .hint.show{display:block}
+  </style>
+</head>
+<body>
+  <div class="stage" id="stage">
+    <video id="vid" src="${safeVideoUrl}" playsinline webkit-playsinline="true" x5-playsinline="true" x5-video-player-type="h5-page" preload="auto"></video>
+
+    <div class="safe-zone" id="safeZone">
+      <div class="sz-top">\u9876\u90E8\u72B6\u6001\u680F\u7981\u533A</div>
+      <div class="sz-bot">\u6296\u97F3\u5E95\u90E8\u6587\u6848\u4E0E\u8FDB\u5EA6\u6761\u906E\u6321\u533A</div>
+      <div class="sz-right">
+        <span class="sz-dot">\u8D5E</span><span class="sz-dot">\u8BC4</span><span class="sz-dot">\u85CF</span><span class="sz-dot">\u8F6C</span>
+      </div>
+    </div>
+
+    <div class="overlay" id="startOverlay">
+      <button class="play-big" id="startBtn" aria-label="\u5F00\u59CB\u5168\u5C4F\u64AD\u653E">\u25B6</button>
+      <div class="ov-title">${safeTitle}</div>
+      <div class="ov-sub">\u8F7B\u70B9\u64AD\u653E\u6296\u97F3\u5168\u5C4F\u539F\u753B\uFF08${resTag}\u542B\u5B8C\u6574\u7ACB\u4F53\u58F0 \xB7 ${sizeMb} MB\uFF09</div>
+      <div class="ov-note">\u539F\u751F H.264 1080P \u786C\u4EF6\u89E3\u7801 \xB7 \u652F\u6301\u9010\u5E27\u68C0\u67E5\u4E0E\u4E00\u952E\u5B58\u76F8\u518C</div>
+    </div>
+
+    <div class="top-bar hide" id="topBar">
+      <div class="top-title">${safeTitle}</div>
+      <div class="frame-pill" id="framePill">\u5E27 0000</div>
+    </div>
+
+    <div class="hud hide" id="hud">
+      <div class="hint" id="hint"></div>
+      <div class="scrub-row">
+        <span class="time-txt" id="curTime">0.00s</span>
+        <input type="range" id="scrubber" min="0" max="1000" step="1" value="0" />
+        <span class="time-txt r" id="durTime">0.0s</span>
+      </div>
+      <div class="btn-row">
+        <div class="grp">
+          <button class="btn primary" id="playBtn">\u6682\u505C</button>
+          <button class="btn" id="prevFrameBtn">-1\u5E27</button>
+          <button class="btn" id="nextFrameBtn">+1\u5E27</button>
+          <button class="btn" id="replayBtn">\u91CD\u64AD</button>
+          <button class="btn" id="muteBtn">\u6709\u58F0</button>
+        </div>
+        <div class="grp">
+          <button class="btn" id="speedBtn">1\xD7</button>
+          <button class="btn" id="safeBtn">\u6296\u97F3\u906E\u6321</button>
+          <button class="btn" id="fitBtn">\u94FA\u6EE1</button>
+          <a class="btn gold" href="${safeDownloadUrl}" download>\u5B58MP4</a>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function(){
+      var FPS = ${fps};
+      var vid = document.getElementById('vid');
+      var stage = document.getElementById('stage');
+      var overlay = document.getElementById('startOverlay');
+      var startBtn = document.getElementById('startBtn');
+      var topBar = document.getElementById('topBar');
+      var hud = document.getElementById('hud');
+      var framePill = document.getElementById('framePill');
+      var curTime = document.getElementById('curTime');
+      var durTime = document.getElementById('durTime');
+      var scrubber = document.getElementById('scrubber');
+      var playBtn = document.getElementById('playBtn');
+      var prevFrameBtn = document.getElementById('prevFrameBtn');
+      var nextFrameBtn = document.getElementById('nextFrameBtn');
+      var replayBtn = document.getElementById('replayBtn');
+      var muteBtn = document.getElementById('muteBtn');
+      var speedBtn = document.getElementById('speedBtn');
+      var safeBtn = document.getElementById('safeBtn');
+      var safeZone = document.getElementById('safeZone');
+      var fitBtn = document.getElementById('fitBtn');
+      var hint = document.getElementById('hint');
+      var started = false, hudVisible = false, hideTimer = null, speeds = [0.5, 1, 1.5], spIdx = 1;
+
+      if (window.innerWidth > window.innerHeight) {
+        vid.classList.add('contain');
+        fitBtn.textContent = '\u5B8C\u6574\u5E27';
+      }
+
+      function showHud(autoHide) {
+        hudVisible = true;
+        topBar.classList.remove('hide');
+        hud.classList.remove('hide');
+        if (hideTimer) clearTimeout(hideTimer);
+        if (autoHide && !vid.paused) {
+          hideTimer = setTimeout(function(){
+            if (!vid.paused) {
+              hudVisible = false;
+              topBar.classList.add('hide');
+              hud.classList.add('hide');
+            }
+          }, 2600);
+        }
+      }
+
+      function syncUi() {
+        var t = vid.currentTime || 0;
+        var d = isFinite(vid.duration) && vid.duration > 0 ? vid.duration : 0;
+        curTime.textContent = t.toFixed(2) + 's';
+        durTime.textContent = d.toFixed(1) + 's';
+        var f = Math.round(t * FPS);
+        var tf = Math.max(1, Math.round(d * FPS));
+        framePill.textContent = '\u5E27 ' + String(f).padStart(4,'0') + ' / ' + tf;
+        if (d > 0) {
+          scrubber.max = String(tf);
+          scrubber.value = String(Math.min(tf, f));
+        }
+        playBtn.textContent = vid.paused ? (d > 0 && t >= d - 0.08 ? '\u91CD\u64AD' : '\u7EE7\u7EED') : '\u6682\u505C';
+        muteBtn.textContent = vid.muted ? '\u5DF2\u9759\u97F3' : '\u6709\u58F0';
+      }
+
+      function startPlay(fromZero) {
+        started = true;
+        overlay.classList.add('hide');
+        if (fromZero) vid.currentTime = 0;
+        var p = vid.play();
+        if (p && p.then) {
+          p.then(function(){
+            hint.classList.remove('show');
+            syncUi();
+            showHud(true);
+          }).catch(function(){
+            vid.muted = true;
+            hint.textContent = '\u7CFB\u7EDF\u62E6\u622A\u81EA\u52A8\u53D1\u58F0\uFF0C\u5DF2\u9759\u97F3\u64AD\u653E\uFF0C\u70B9\u4E0B\u65B9\u300C\u5DF2\u9759\u97F3\u300D\u6062\u590D\u58F0\u97F3';
+            hint.classList.add('show');
+            vid.play().catch(function(){});
+            syncUi();
+            showHud(false);
+          });
+        } else {
+          syncUi();
+          showHud(true);
+        }
+      }
+
+      startBtn.addEventListener('click', function(e){ e.stopPropagation(); startPlay(false); });
+      overlay.addEventListener('click', function(){ startPlay(false); });
+      hud.addEventListener('click', function(e){ e.stopPropagation(); });
+
+      stage.addEventListener('click', function(){
+        if (!started) { startPlay(false); return; }
+        if (vid.paused) { startPlay(false); return; }
+        if (hudVisible) {
+          hudVisible = false;
+          topBar.classList.add('hide');
+          hud.classList.add('hide');
+        } else {
+          showHud(true);
+        }
+      });
+
+      playBtn.addEventListener('click', function(){
+        if (vid.paused) {
+          var d = vid.duration || 0;
+          startPlay(d > 0 && vid.currentTime >= d - 0.08);
+        } else {
+          vid.pause();
+          syncUi();
+          showHud(false);
+        }
+      });
+
+      prevFrameBtn.addEventListener('click', function(){
+        vid.pause();
+        vid.currentTime = Math.max(0, (vid.currentTime || 0) - 1 / FPS);
+        syncUi();
+        showHud(false);
+      });
+
+      nextFrameBtn.addEventListener('click', function(){
+        vid.pause();
+        var d = vid.duration || 9999;
+        vid.currentTime = Math.min(d, (vid.currentTime || 0) + 1 / FPS);
+        syncUi();
+        showHud(false);
+      });
+
+      replayBtn.addEventListener('click', function(){ startPlay(true); });
+      muteBtn.addEventListener('click', function(){ vid.muted = !vid.muted; syncUi(); });
+      speedBtn.addEventListener('click', function(){
+        spIdx = (spIdx + 1) % speeds.length;
+        vid.playbackRate = speeds[spIdx];
+        speedBtn.textContent = speeds[spIdx] + '\xD7';
+      });
+      safeBtn.addEventListener('click', function(){
+        var on = safeZone.classList.toggle('show');
+        safeBtn.classList.toggle('on', on);
+      });
+      fitBtn.addEventListener('click', function(){
+        var isContain = vid.classList.toggle('contain');
+        fitBtn.textContent = isContain ? '\u5B8C\u6574\u5E27' : '\u94FA\u6EE1';
+      });
+
+      scrubber.addEventListener('input', function(){
+        vid.pause();
+        vid.currentTime = Number(scrubber.value) / FPS;
+        syncUi();
+        showHud(false);
+      });
+
+      vid.addEventListener('loadedmetadata', syncUi);
+      vid.addEventListener('timeupdate', syncUi);
+      vid.addEventListener('pause', function(){ syncUi(); showHud(false); });
+      vid.addEventListener('ended', function(){ syncUi(); showHud(false); });
+    })();
+  </script>
+</body>
+</html>`;
+}
+
 // server.ts
 var execFileAsync = promisify(execFile);
 var PORT = Number(process.env.PORT || 3e3);
 var EPISODE_ID_RE = /^[A-Za-z0-9_-]+$/;
-var episodesRootDir = path.resolve(process.cwd(), "episodes");
-var previewsRootDir = path.join(episodesRootDir, "_previews");
-var assetsRootDir = path.resolve(process.cwd(), "assets");
+var episodesRootDir = path3.resolve(process.cwd(), "episodes");
+var previewsRootDir = path3.join(episodesRootDir, "_previews");
+var assetsRootDir = path3.resolve(process.cwd(), "assets");
 var ALLOWED_TTS_VOICES = /* @__PURE__ */ new Set(["Charon", "Kore", "Puck", "Fenrir", "Aoede", "Zephyr"]);
 function sendBufferWithRange(req, res, buf, contentType, filename) {
   const total = buf.length;
@@ -2322,12 +3177,47 @@ function sendBufferWithRange(req, res, buf, contentType, filename) {
   res.send(buf);
 }
 function getMobilePreviewPath(previewKey) {
-  return path.join(previewsRootDir, `${previewKey}.mp4`);
+  return path3.join(previewsRootDir, `${previewKey}.mp4`);
+}
+var videoDimCache = /* @__PURE__ */ new Map();
+function probeVideoDimensions(filePath, mtimeMs) {
+  const cached = videoDimCache.get(filePath);
+  if (cached && Math.floor(cached.mtimeMs) === Math.floor(mtimeMs)) {
+    return { width: cached.width, height: cached.height };
+  }
+  try {
+    const out = spawnSync2(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0:s=x",
+        filePath
+      ],
+      { encoding: "utf-8", timeout: 4e3, windowsHide: true }
+    );
+    const match = (out.stdout || "").trim().match(/^(\d+)x(\d+)$/);
+    if (match) {
+      const width = Number(match[1]);
+      const height = Number(match[2]);
+      if (width > 0 && height > 0) {
+        videoDimCache.set(filePath, { mtimeMs, width, height });
+        return { width, height };
+      }
+    }
+  } catch {
+  }
+  return null;
 }
 var cachedFfmpegBinary;
 function probeFfmpegBinary(candidate) {
   try {
-    const res = spawnSync(candidate, ["-version"], {
+    const res = spawnSync2(candidate, ["-version"], {
       stdio: "ignore",
       timeout: 5e3,
       windowsHide: true
@@ -2350,7 +3240,7 @@ function resolveFfmpegBinary() {
   if (process.platform === "win32") {
     candidates.push("ffmpeg.exe");
   }
-  if (fs.existsSync("/usr/bin/ffmpeg")) {
+  if (fs3.existsSync("/usr/bin/ffmpeg")) {
     candidates.push("/usr/bin/ffmpeg");
   }
   for (const candidate of candidates) {
@@ -2366,25 +3256,25 @@ function isValidEpisodeId(id) {
   return EPISODE_ID_RE.test(id);
 }
 function getEpisodeManifestPath(id) {
-  return path.join(episodesRootDir, id, "episode.json");
+  return path3.join(episodesRootDir, id, "episode.json");
 }
 function getEpisodeVoiceoverPath(id) {
-  return path.join(episodesRootDir, id, "voiceover.wav");
+  return path3.join(episodesRootDir, id, "voiceover.wav");
 }
 function loadEpisodeManifest(id) {
   if (!isValidEpisodeId(id)) return null;
   const manifestPath = getEpisodeManifestPath(id);
-  if (!fs.existsSync(manifestPath)) return null;
-  const raw = fs.readFileSync(manifestPath, "utf-8");
+  if (!fs3.existsSync(manifestPath)) return null;
+  const raw = fs3.readFileSync(manifestPath, "utf-8");
   return JSON.parse(raw);
 }
 function buildEpisodeAudioPcmWithOptionalVoice(episodeId, episode, includeVoice = true, sampleRate = 44100) {
   const bgm = synthesizeEpisodeAudioPcm(episode, sampleRate);
   if (!includeVoice) return bgm;
   const voPath = getEpisodeVoiceoverPath(episodeId);
-  if (!fs.existsSync(voPath)) return bgm;
+  if (!fs3.existsSync(voPath)) return bgm;
   try {
-    const wavBytes = new Uint8Array(fs.readFileSync(voPath));
+    const wavBytes = new Uint8Array(fs3.readFileSync(voPath));
     const decoded = decodeWavToMonoFloat32(wavBytes);
     const duckingDb = episode.audio?.duckingDb ?? -13;
     return mixVoiceoverIntoStereoPcm(bgm, decoded.samples, decoded.sampleRate, duckingDb);
@@ -2416,7 +3306,7 @@ setInterval(() => {
   const now = Date.now();
   for (const [id, sess] of sessions.entries()) {
     if (now - sess.createdAt > 20 * 60 * 1e3) {
-      fs.rmSync(sess.dir, { recursive: true, force: true });
+      fs3.rmSync(sess.dir, { recursive: true, force: true });
       sessions.delete(id);
     }
   }
@@ -2424,6 +3314,7 @@ setInterval(() => {
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: "80mb" }));
+  void warmCloudUploaders();
   app.use("/episodes", express.static(episodesRootDir));
   app.use("/assets", express.static(assetsRootDir));
   app.get("/api/health", (_req, res) => {
@@ -2442,12 +3333,26 @@ async function startServer() {
     const requestOrigin = host ? `${proto}://${host}` : "";
     const baseUrl = envAppUrl || requestOrigin;
     const sharedAppUrl = baseUrl.includes("://ais-dev-") ? baseUrl.replace("://ais-dev-", "://ais-pre-") : baseUrl;
+    const tunnel = mobileTunnel.getSnapshot();
     res.json({
       appUrl: baseUrl,
       sharedAppUrl,
       requestOrigin,
+      tunnelUrl: tunnel.url,
+      tunnel,
       ffmpegAvailable: Boolean(resolveFfmpegBinary())
     });
+  });
+  app.get("/api/mobile-tunnel/status", (_req, res) => {
+    res.json(mobileTunnel.getSnapshot());
+  });
+  app.post("/api/mobile-tunnel/start", async (req, res) => {
+    const force = req.query.force === "1" || req.body?.force === true;
+    const snapshot = await mobileTunnel.start(PORT, force);
+    res.json(snapshot);
+  });
+  app.post("/api/mobile-tunnel/stop", (_req, res) => {
+    res.json(mobileTunnel.stop());
   });
   app.get("/api/runtime-info/check-share", async (req, res) => {
     const envAppUrl = (process.env.APP_URL || "").trim().replace(/\/+$/, "");
@@ -2524,18 +3429,76 @@ async function startServer() {
       return;
     }
     const filePath = getMobilePreviewPath(key);
-    if (!fs.existsSync(filePath)) {
-      res.json({ ready: false, key });
+    if (!fs3.existsSync(filePath)) {
+      res.json({ ready: false, key, cloudChannels: [] });
       return;
     }
-    const stat = fs.statSync(filePath);
+    const stat = fs3.statSync(filePath);
+    const dims = probeVideoDimensions(filePath, stat.mtimeMs);
+    const cachedBundle = getCachedCloudShareBundle(key, stat.mtimeMs, filePath);
     res.json({
       ready: true,
       key,
       sizeBytes: stat.size,
+      width: dims?.width ?? null,
+      height: dims?.height ?? null,
       updatedAt: stat.mtime.toISOString(),
-      videoUrl: `/api/mobile-preview/${encodeURIComponent(key)}/video.mp4?v=${Math.floor(stat.mtimeMs)}`
+      playerPath: `/m/${encodeURIComponent(key)}`,
+      videoUrl: `/api/mobile-preview/${encodeURIComponent(key)}/video.mp4?v=${Math.floor(stat.mtimeMs)}`,
+      downloadUrl: `/api/mobile-preview/${encodeURIComponent(key)}/download`,
+      cloudChannels: cachedBundle?.channels ?? [],
+      cloudErrors: cachedBundle?.errors ?? {},
+      pendingBackups: Boolean(cachedBundle?.pendingBackups)
     });
+  });
+  app.get("/m/:key", (req, res) => {
+    const key = String(req.params.key || "").trim();
+    if (!isValidEpisodeId(key)) {
+      res.status(400).send("Invalid preview key");
+      return;
+    }
+    const filePath = getMobilePreviewPath(key);
+    if (!fs3.existsSync(filePath)) {
+      if (key.startsWith("ep_")) {
+        res.redirect(302, `/?mobile=1&episode=${encodeURIComponent(key.slice(3))}`);
+      } else if (key.startsWith("mode_")) {
+        res.redirect(302, `/?mobile=1&mode=${encodeURIComponent(key.slice(5))}`);
+      } else {
+        res.redirect(302, "/?mobile=1");
+      }
+      return;
+    }
+    const stat = fs3.statSync(filePath);
+    let title = "QuantReel \u5168\u5C4F\u5BA1\u7247";
+    let fps = 30;
+    if (key.startsWith("ep_")) {
+      const ep = loadEpisodeManifest(key.slice(3));
+      if (ep) {
+        title = ep.title || ep.id;
+        fps = ep.spec?.fps || 30;
+      }
+    } else if (key === "mode_1120_v2") {
+      title = "11.20 \u76D8\u524D\u98CE\u5411\uFF08v2 \u7CBE\u4FEE\u7206\u6B3E\u7248\uFF09";
+    } else if (key === "mode_1120_intel") {
+      title = "11.20 \u76D8\u524D\u98CE\u5411\uFF08v1 \u5B58\u6863\u7248\uFF09";
+    } else if (key === "mode_morning_brief") {
+      title = "11.19 \u76D8\u524D\u65E9\u62A5";
+    } else if (key === "mode_1117_close") {
+      title = "11.17 \u6536\u76D8\u8D44\u91D1\u6D41\u5411\u590D\u523B";
+    }
+    const dims = probeVideoDimensions(filePath, stat.mtimeMs);
+    const html = renderStandaloneMobilePlayerHtml({
+      title,
+      videoUrl: `/api/mobile-preview/${encodeURIComponent(key)}/video.mp4?v=${Math.floor(stat.mtimeMs)}`,
+      downloadUrl: `/api/mobile-preview/${encodeURIComponent(key)}/download`,
+      fps,
+      sizeBytes: stat.size,
+      width: dims?.width,
+      height: dims?.height
+    });
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(html);
   });
   app.get("/api/mobile-preview/:key/video.mp4", (req, res) => {
     const key = String(req.params.key || "").trim();
@@ -2544,30 +3507,164 @@ async function startServer() {
       return;
     }
     const filePath = getMobilePreviewPath(key);
-    if (!fs.existsSync(filePath)) {
+    if (!fs3.existsSync(filePath)) {
       res.status(404).json({ error: "Mobile preview MP4 not yet rendered" });
       return;
     }
     res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Disposition", `inline; filename="${key}_preview.mp4"`);
     res.setHeader("Cache-Control", "no-cache");
     res.sendFile(filePath);
   });
+  app.get("/api/mobile-preview/:key/download", (req, res) => {
+    const key = String(req.params.key || "").trim();
+    if (!isValidEpisodeId(key)) {
+      res.status(400).json({ error: "Invalid preview key" });
+      return;
+    }
+    const filePath = getMobilePreviewPath(key);
+    if (!fs3.existsSync(filePath)) {
+      res.status(404).json({ error: "Mobile preview MP4 not yet rendered" });
+      return;
+    }
+    res.download(filePath, `${key}_mobile_preview.mp4`);
+  });
+  app.post("/api/mobile-preview/:key/publish-cloud", async (req, res) => {
+    const key = String(req.params.key || "").trim();
+    if (!isValidEpisodeId(key)) {
+      res.status(400).json({ error: "Invalid preview key" });
+      return;
+    }
+    const filePath = getMobilePreviewPath(key);
+    if (!fs3.existsSync(filePath)) {
+      res.status(404).json({ error: "\u8BF7\u5148\u751F\u6210\u624B\u673A\u9AD8\u6E05 MP4 \u7F13\u5B58\u540E\u518D\u53D1\u5E03\u4E91\u7AEF\u626B\u7801\u94FE\u63A5" });
+      return;
+    }
+    const force = req.body?.force === true;
+    try {
+      const bundle = await publishMp4ToCloudChannels(key, filePath, force, true);
+      res.json({
+        ok: true,
+        ...bundle
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "\u4E91\u7AEF\u76F4\u8FDE\u901A\u9053\u53D1\u5E03\u5931\u8D25";
+      res.status(502).json({ error: message });
+    }
+  });
+  app.post(
+    "/api/mobile-preview/:key/upload-mp4",
+    express.raw({ type: ["application/octet-stream", "video/mp4"], limit: "80mb" }),
+    async (req, res) => {
+      const key = String(req.params.key || "").trim();
+      if (!isValidEpisodeId(key)) {
+        res.status(400).json({ error: "Invalid preview key" });
+        return;
+      }
+      const bodyBuf = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!bodyBuf || bodyBuf.length < 1024) {
+        res.status(400).json({ error: "Uploaded MP4 payload is empty or invalid" });
+        return;
+      }
+      const muxAudio = req.query.muxAudio === "1";
+      const shouldPublish = req.query.publish !== "0";
+      const episodeId = typeof req.query.episodeId === "string" ? req.query.episodeId.trim() : "";
+      const track = typeof req.query.track === "string" ? req.query.track.trim() : "1120_v2";
+      try {
+        fs3.mkdirSync(previewsRootDir, { recursive: true });
+        const destPath = getMobilePreviewPath(key);
+        if (!muxAudio) {
+          const tmpPath = `${destPath}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+          fs3.writeFileSync(tmpPath, bodyBuf);
+          fs3.renameSync(tmpPath, destPath);
+        } else {
+          const ffmpegBin = resolveFfmpegBinary();
+          if (!ffmpegBin) {
+            res.status(503).json({ error: "FFmpeg binary not available for audio mux" });
+            return;
+          }
+          const tmpDir = fs3.mkdtempSync(path3.join(os2.tmpdir(), "quantreel-fastmux-"));
+          try {
+            const rawMp4 = path3.join(tmpDir, "video.mp4");
+            const wavPath = path3.join(tmpDir, "audio.wav");
+            const outMp4 = path3.join(tmpDir, "out.mp4");
+            fs3.writeFileSync(rawMp4, bodyBuf);
+            let pcm;
+            if (episodeId && isValidEpisodeId(episodeId)) {
+              const ep = loadEpisodeManifest(episodeId);
+              if (ep) {
+                pcm = buildEpisodeAudioPcmWithOptionalVoice(episodeId, ep, true, 44100);
+              }
+            }
+            if (!pcm) {
+              pcm = track === "1120_v2" ? synthesizeIntelV2TrackPcm(44100) : track === "1120" ? synthesizeIntelTrackPcm(44100) : synthesizeTrackPcm(44100);
+            }
+            fs3.writeFileSync(wavPath, Buffer.from(encodeStereoWav(pcm)));
+            await execFileAsync(ffmpegBin, [
+              "-y",
+              "-i",
+              rawMp4,
+              "-i",
+              wavPath,
+              "-map",
+              "0:v:0",
+              "-map",
+              "1:a:0",
+              "-c:v",
+              "copy",
+              "-c:a",
+              "aac",
+              "-b:a",
+              "96k",
+              "-movflags",
+              "+faststart",
+              "-shortest",
+              outMp4
+            ]);
+            fs3.copyFileSync(outMp4, destPath);
+          } finally {
+            fs3.rmSync(tmpDir, { recursive: true, force: true });
+          }
+        }
+        const stat = fs3.statSync(destPath);
+        const dims = probeVideoDimensions(destPath, stat.mtimeMs);
+        let bundle = null;
+        if (shouldPublish) {
+          bundle = await publishMp4ToCloudChannels(key, destPath, true, true);
+        }
+        res.json({
+          ok: true,
+          key,
+          sizeBytes: stat.size,
+          width: dims?.width ?? null,
+          height: dims?.height ?? null,
+          downloadUrl: `/api/mobile-preview/${encodeURIComponent(key)}/download`,
+          channels: bundle?.channels ?? [],
+          errors: bundle?.errors ?? {},
+          pendingBackups: Boolean(bundle?.pendingBackups)
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "\u9AD8\u901F MP4 \u4E0A\u4F20\u4E0E\u53D1\u5E03\u5931\u8D25";
+        res.status(500).json({ error: message });
+      }
+    }
+  );
   app.get("/api/episodes", (_req, res) => {
     try {
-      if (!fs.existsSync(episodesRootDir)) {
+      if (!fs3.existsSync(episodesRootDir)) {
         res.json({ episodes: [] });
         return;
       }
-      const entries = fs.readdirSync(episodesRootDir, { withFileTypes: true });
+      const entries = fs3.readdirSync(episodesRootDir, { withFileTypes: true });
       const episodes = [];
       for (const entry of entries) {
         if (!entry.isDirectory() || entry.name.startsWith("_") || !isValidEpisodeId(entry.name)) {
           continue;
         }
         const manifestPath = getEpisodeManifestPath(entry.name);
-        if (!fs.existsSync(manifestPath)) continue;
+        if (!fs3.existsSync(manifestPath)) continue;
         try {
-          const raw = fs.readFileSync(manifestPath, "utf-8");
+          const raw = fs3.readFileSync(manifestPath, "utf-8");
           const episode = JSON.parse(raw);
           if (!isValidEpisodeManifestBody(episode)) continue;
           const tl = compileEpisodeTimeline(episode);
@@ -2579,7 +3676,7 @@ async function startServer() {
           const hasNarration = episode.scenes.some(
             (s) => typeof s.narration === "string" && s.narration.trim().length > 0
           );
-          const hasVoiceover = fs.existsSync(getEpisodeVoiceoverPath(episodeId));
+          const hasVoiceover = fs3.existsSync(getEpisodeVoiceoverPath(episodeId));
           episodes.push({
             id: episodeId,
             date: episode.date || entry.name,
@@ -2641,14 +3738,14 @@ async function startServer() {
       return;
     }
     try {
-      const targetDir = path.join(episodesRootDir, id);
-      fs.mkdirSync(targetDir, { recursive: true });
+      const targetDir = path3.join(episodesRootDir, id);
+      fs3.mkdirSync(targetDir, { recursive: true });
       const manifest = {
         ...req.body,
         id
       };
-      fs.writeFileSync(
-        path.join(targetDir, "episode.json"),
+      fs3.writeFileSync(
+        path3.join(targetDir, "episode.json"),
         `${JSON.stringify(manifest, null, 2)}
 `,
         "utf-8"
@@ -2747,7 +3844,7 @@ async function startServer() {
       }
       const masterWav = encodeMonoWav(masterSamples, masterRate);
       const outPath = getEpisodeVoiceoverPath(id);
-      fs.writeFileSync(outPath, Buffer.from(masterWav));
+      fs3.writeFileSync(outPath, Buffer.from(masterWav));
       res.json({
         ok: true,
         id,
@@ -2763,12 +3860,12 @@ async function startServer() {
   });
   app.get("/api/hooks", (_req, res) => {
     try {
-      const hooksManifestPath = path.join(assetsRootDir, "hooks", "manifest.json");
-      if (!fs.existsSync(hooksManifestPath)) {
+      const hooksManifestPath = path3.join(assetsRootDir, "hooks", "manifest.json");
+      if (!fs3.existsSync(hooksManifestPath)) {
         res.status(404).json({ error: "Hooks manifest not found" });
         return;
       }
-      const raw = fs.readFileSync(hooksManifestPath, "utf-8");
+      const raw = fs3.readFileSync(hooksManifestPath, "utf-8");
       res.json(JSON.parse(raw));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load hooks manifest";
@@ -2794,13 +3891,13 @@ async function startServer() {
       }
       try {
         const epPath = getEpisodeManifestPath(episodeId);
-        if (!fs.existsSync(epPath)) {
+        if (!fs3.existsSync(epPath)) {
           res.status(404).json({ error: `Episode "${episodeId}" not found` });
           return;
         }
         const voPath = getEpisodeVoiceoverPath(episodeId);
-        const epMtime = fs.statSync(epPath).mtimeMs;
-        const voMtime = includeVoice && fs.existsSync(voPath) ? fs.statSync(voPath).mtimeMs : 0;
+        const epMtime = fs3.statSync(epPath).mtimeMs;
+        const voMtime = includeVoice && fs3.existsSync(voPath) ? fs3.statSync(voPath).mtimeMs : 0;
         const cacheKey2 = `ep:${episodeId}:${includeVoice ? 1 : 0}:${epMtime}:${voMtime}`;
         const cached2 = wavBufferCache.get(cacheKey2);
         if (cached2) {
@@ -2876,7 +3973,7 @@ async function startServer() {
       }
     }
     const sessionId = crypto.randomUUID();
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `quantreel-${sessionId}-`));
+    const dir = fs3.mkdtempSync(path3.join(os2.tmpdir(), `quantreel-${sessionId}-`));
     sessions.set(sessionId, {
       dir,
       totalFrames: Number(totalFrames),
@@ -2903,7 +4000,7 @@ async function startServer() {
       const base64 = item.dataUrl.replace(/^data:image\/\w+;base64,/, "");
       const buf = Buffer.from(base64, "base64");
       const fileName = `frame_${String(item.index).padStart(4, "0")}.jpg`;
-      fs.writeFileSync(path.join(sess.dir, fileName), buf);
+      fs3.writeFileSync(path3.join(sess.dir, fileName), buf);
       sess.receivedFrames++;
     }
     res.json({ receivedFrames: sess.receivedFrames });
@@ -2922,8 +4019,8 @@ async function startServer() {
       return;
     }
     try {
-      const wavPath = path.join(sess.dir, "bgm.wav");
-      const mp4Path = path.join(sess.dir, "output.mp4");
+      const wavPath = path3.join(sess.dir, "bgm.wav");
+      const mp4Path = path3.join(sess.dir, "output.mp4");
       let pcm;
       if (sess.episodeId) {
         const episode = loadEpisodeManifest(sess.episodeId);
@@ -2941,13 +4038,14 @@ async function startServer() {
         pcm = sess.track === "1120_v2" ? synthesizeIntelV2TrackPcm(44100) : sess.track === "1120" ? synthesizeIntelTrackPcm(44100) : synthesizeTrackPcm(44100);
       }
       const wav = encodeStereoWav(pcm);
-      fs.writeFileSync(wavPath, Buffer.from(wav));
+      fs3.writeFileSync(wavPath, Buffer.from(wav));
+      const isMobileBake = Boolean(sess.persistPreviewKey);
       await execFileAsync(ffmpegBin, [
         "-y",
         "-framerate",
         String(sess.fps || 30),
         "-i",
-        path.join(sess.dir, "frame_%04d.jpg"),
+        path3.join(sess.dir, "frame_%04d.jpg"),
         "-i",
         wavPath,
         "-vf",
@@ -2957,29 +4055,29 @@ async function startServer() {
         "-profile:v",
         "main",
         "-level",
-        "4.0",
+        "4.1",
         "-pix_fmt",
         "yuv420p",
         "-crf",
-        "18",
+        isMobileBake ? "21" : "18",
         "-preset",
-        "veryfast",
+        isMobileBake ? "ultrafast" : "veryfast",
         "-c:a",
         "aac",
         "-b:a",
-        "192k",
+        isMobileBake ? "128k" : "192k",
         "-movflags",
         "+faststart",
         "-shortest",
         mp4Path
       ]);
-      const stat = fs.statSync(mp4Path);
+      const stat = fs3.statSync(mp4Path);
       sess.mp4Path = mp4Path;
       let previewVideoUrl;
       if (sess.persistPreviewKey) {
-        fs.mkdirSync(previewsRootDir, { recursive: true });
+        fs3.mkdirSync(previewsRootDir, { recursive: true });
         const destPath = getMobilePreviewPath(sess.persistPreviewKey);
-        fs.copyFileSync(mp4Path, destPath);
+        fs3.copyFileSync(mp4Path, destPath);
         previewVideoUrl = `/api/mobile-preview/${encodeURIComponent(sess.persistPreviewKey)}/video.mp4?v=${Date.now()}`;
       }
       res.json({
@@ -2995,7 +4093,7 @@ async function startServer() {
   });
   app.get("/api/export/:sessionId/download", (req, res) => {
     const sess = sessions.get(req.params.sessionId);
-    if (!sess?.mp4Path || !fs.existsSync(sess.mp4Path)) {
+    if (!sess?.mp4Path || !fs3.existsSync(sess.mp4Path)) {
       res.status(404).json({ error: "Rendered MP4 not found" });
       return;
     }
@@ -3013,21 +4111,24 @@ async function startServer() {
     }
   );
   if (process.env.NODE_ENV === "production") {
-    const distDir = path.resolve(process.cwd(), "dist");
+    const distDir = path3.resolve(process.cwd(), "dist");
     app.use(express.static(distDir));
     app.get("*", (_req, res) => {
-      res.sendFile(path.join(distDir, "index.html"));
+      res.sendFile(path3.join(distDir, "index.html"));
     });
   } else {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: "spa"
     });
     app.use(vite.middlewares);
   }
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`QuantReel Studio listening on http://0.0.0.0:${PORT}`);
+    if (process.env.DISABLE_AUTO_TUNNEL !== "true" && process.env.NODE_ENV !== "production") {
+      void mobileTunnel.start(PORT);
+    }
   });
 }
 startServer();

@@ -150,8 +150,6 @@ function drawCompactPolishedCommodityCard(
   thresholdPct: number,
   localF: number,
   enterFrame: number,
-  typeStartFrame: number,
-  typeEndFrame: number,
   activeGlow: boolean
 ): void {
   if (localF < enterFrame) return;
@@ -187,14 +185,10 @@ function drawCompactPolishedCommodityCard(
   ctx.fillStyle = rim;
   ctx.fillRect(x + 18, y + 1, w - 36, 1.5);
 
-  ctx.fillStyle = '#F59E0B';
-  roundRect(ctx, x, y + 12, 6, h - 24, 3);
-  ctx.fill();
-
   // Header row (enlarged headline + clear threshold tag)
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.font = `900 37px ${FONT}`;
+  ctx.font = `900 38px ${FONT}`;
   ctx.fillStyle = '#FBBF24';
   ctx.fillText(data.commodityHeadline, x + 22, y + 30, w - 236);
 
@@ -203,52 +197,86 @@ function drawCompactPolishedCommodityCard(
   ctx.fillStyle = '#94A3B8';
   ctx.fillText(`±${thresholdPct.toFixed(1)}% 平稳过滤`, x + w - 20, y + 30);
 
-  // 4 compact glass commodity tiles with larger legible labels & percentages
+  // 2x2 Big Horizontal Commodity Cards (wider tiles, bold 33px names + prominent 40px % badges)
   const previewItems = data.commodityWatchlist.slice(0, 4);
   if (previewItems.length > 0) {
-    const tileGap = 12;
-    const tileW = Math.floor((w - 44 - tileGap * (previewItems.length - 1)) / previewItems.length);
-    const tileY = y + 54;
-    const tileH = 82;
+    const gapX = 16;
+    const gapY = 12;
+    const tileW = Math.floor((w - 44 - gapX) / 2);
+    const tileH = 86;
+    const gridTop = y + 60;
 
     previewItems.forEach((item, idx) => {
-      const tx = x + 22 + idx * (tileW + tileGap);
-      ctx.fillStyle = 'rgba(7, 11, 20, 0.9)';
-      roundRect(ctx, tx, tileY, tileW, tileH, 10);
+      const col = idx % 2;
+      const row = Math.floor(idx / 2);
+      const tx = x + 22 + col * (tileW + gapX);
+      const ty = gridTop + row * (tileH + gapY);
+      const isUp = item.changePct >= 0;
+      const accentRgb = isUp ? '239, 68, 68' : '16, 185, 129';
+      const numCol = isUp ? '#F87171' : '#34D399';
+
+      const tileBg = ctx.createLinearGradient(tx, ty, tx + tileW, ty);
+      tileBg.addColorStop(0, 'rgba(8, 13, 24, 0.96)');
+      tileBg.addColorStop(1, `rgba(${accentRgb}, 0.11)`);
+      ctx.fillStyle = tileBg;
+      roundRect(ctx, tx, ty, tileW, tileH, 11);
       ctx.fill();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-      ctx.lineWidth = 1;
+
+      ctx.strokeStyle = `rgba(${accentRgb}, 0.34)`;
+      ctx.lineWidth = 1.4;
       ctx.stroke();
 
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.font = `700 23px ${FONT}`;
-      ctx.fillStyle = '#E2E8F0';
-      ctx.fillText(item.name, tx + tileW / 2, tileY + 10, tileW - 12);
+      // Left directional color indicator bar
+      ctx.fillStyle = isUp ? '#EF4444' : '#10B981';
+      roundRect(ctx, tx + 2, ty + 14, 5, tileH - 28, 2.5);
+      ctx.fill();
 
-      const sign = item.changePct >= 0 ? '+' : '';
-      ctx.font = `900 30px ${MONO}`;
-      ctx.fillStyle = item.changePct >= 0 ? '#F87171' : '#34D399';
-      ctx.fillText(`${sign}${item.changePct.toFixed(2)}%`, tx + tileW / 2, tileY + 44, tileW - 12);
+      // Right highlighted percentage badge
+      const pctBadgeW = 168;
+      const pctBadgeH = 56;
+      const pctBadgeX = tx + tileW - pctBadgeW - 14;
+      const pctBadgeY = ty + (tileH - pctBadgeH) / 2;
+
+      ctx.fillStyle = `rgba(${accentRgb}, 0.16)`;
+      roundRect(ctx, pctBadgeX, pctBadgeY, pctBadgeW, pctBadgeH, 9);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${accentRgb}, 0.42)`;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      const sign = isUp ? '+' : '';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `900 40px ${MONO}`;
+      ctx.fillStyle = numCol;
+      ctx.fillText(
+        `${sign}${item.changePct.toFixed(2)}%`,
+        pctBadgeX + pctBadgeW / 2,
+        pctBadgeY + pctBadgeH / 2 + 1,
+        pctBadgeW - 14
+      );
+
+      // Left oversized commodity name
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = `900 33px ${FONT}`;
+      ctx.fillStyle = '#F8FAFC';
+      ctx.fillText(item.name, tx + 20, ty + tileH / 2 + 1, pctBadgeX - tx - 32);
     });
   }
 
-  // Bottom 2-line wrapped typewriter explanation (enlarged 31px, crisp readability!)
-  const chars = Array.from(data.commodityReason);
-  const typeT =
-    localF < typeStartFrame
-      ? 0
-      : clamp((localF - typeStartFrame) / Math.max(1, typeEndFrame - typeStartFrame), 0, 1);
-  const visible = typeT <= 0 ? '' : chars.slice(0, Math.max(1, Math.floor(typeT * chars.length))).join('');
-  const typing = typeT > 0 && typeT < 1;
-  const caret = typing && Math.floor(localF / 6) % 2 === 0 ? '▌' : '';
-
-  if (visible) {
+  // Bottom complete 2-line explanation sliding in smoothly together with the card (no typewriter)
+  const textReveal = easeOutCubic(clamp((localF - enterFrame - 2) / 14, 0, 1));
+  if (textReveal > 0) {
+    ctx.save();
+    ctx.globalAlpha *= textReveal;
+    ctx.translate(0, lerp(16, 0, textReveal));
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.font = `600 31px ${FONT}`;
+    ctx.font = `600 35px ${FONT}`;
     ctx.fillStyle = '#F1F5F9';
-    drawWrappedText(ctx, visible + caret, x + 22, y + 148, w - 44, 38);
+    drawWrappedText(ctx, data.commodityReason, x + 22, y + 258, w - 44, 50);
+    ctx.restore();
   }
 
   ctx.restore();
@@ -523,11 +551,11 @@ export function renderMarketChronoBoardScene(
     ctx.fillStyle = aura;
     ctx.fillRect(0, 0, width, height);
 
-    // Full-bleed top hairline progress + generous safe-margin card grid
-    const padX = 44;
-    const fullW = width - padX * 2; // 992px
+    // Full-bleed top hairline progress + symmetrical safe-margin card grid
+    const padX = 36;
+    const fullW = width - padX * 2; // 1008px
     const gap = 16;
-    const colW = (fullW - gap) / 2; // 488px
+    const colW = (fullW - gap) / 2; // 496px
     const xLeft = padX;
     const xRight = padX + colW + gap;
 
@@ -539,55 +567,16 @@ export function renderMarketChronoBoardScene(
 
     // Refined Brush Hero Title inside safe top lane
     const heroTitle = data.centeredHeroTitle ?? episode.title;
-    drawAnimatedBrushHeroTitle(ctx, width, heroTitle, localF, false, 122, 80, 890);
+    drawAnimatedBrushHeroTitle(ctx, width, heroTitle, localF, false, 104, 76, 890);
 
-    // Left-edge subtle visual guidance progress rail (4 glowing step nodes)
-    const railX = 22;
-    const railNodesY = [288, 672, 1073, 1455];
-    const railColors = ['#38BDF8', '#34D399', '#F59E0B', '#FACC15'];
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(railX, railNodesY[0]);
-    ctx.lineTo(railX, railNodesY[3]);
-    ctx.stroke();
-
-    const beamY = railNodesY[activeStage];
-    const beamGrad = ctx.createLinearGradient(0, railNodesY[0], 0, beamY);
-    beamGrad.addColorStop(0, '#38BDF8');
-    beamGrad.addColorStop(1, railColors[activeStage]);
-    ctx.strokeStyle = beamGrad;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(railX, railNodesY[0]);
-    ctx.lineTo(railX, beamY);
-    ctx.stroke();
-
-    railNodesY.forEach((ny, idx) => {
-      const reached = idx <= activeStage;
-      const isCur = idx === activeStage;
-      if (isCur) {
-        ctx.fillStyle = `${railColors[idx]}44`;
-        ctx.beginPath();
-        ctx.arc(railX, ny, 12, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.fillStyle = reached ? railColors[idx] : 'rgba(255, 255, 255, 0.22)';
-      ctx.beginPath();
-      ctx.arc(railX, ny, isCur ? 6 : 4, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.restore();
-
-    // PART 1: US Markets (y = 180..392, summary y = 400..558 with enlarged 39px/32px typography!)
+    // PART 1: US Markets (y = 158..340, summary y = 350..536)
     const usActive = activeStage === 0;
-    drawCleanIndexCard(ctx, xLeft, 180, colW, 212, data.usIndices[0], localF, timing.usStart, 'left', {
+    drawCleanIndexCard(ctx, xLeft, 158, colW, 182, data.usIndices[0], localF, timing.usStart, 'left', {
       light: false,
       polished: true,
       activeGlow: usActive,
     });
-    drawCleanIndexCard(ctx, xRight, 180, colW, 212, data.usIndices[1], localF, timing.usStart + 4, 'right', {
+    drawCleanIndexCard(ctx, xRight, 158, colW, 182, data.usIndices[1], localF, timing.usStart + 4, 'right', {
       light: false,
       polished: true,
       activeGlow: usActive,
@@ -595,32 +584,34 @@ export function renderMarketChronoBoardScene(
     drawTypewriterSummaryStrip(
       ctx,
       xLeft,
-      400,
+      350,
       fullW,
-      158,
+      186,
       '#FBBF24',
       data.usHeadline,
       data.usReason,
       localF,
-      timing.usHeadlineFrame,
-      timing.usTypeStart,
-      timing.usTypeEnd,
-      39,
-      32,
-      timing.asiaStart,
+      timing.usStart + 4,
+      timing.usStart + 4,
+      timing.usStart + 4,
+      40,
+      35,
+      undefined,
       false,
       true,
-      usActive
+      usActive,
+      true,
+      50
     );
 
-    // PART 2: Asia Open (y = 570..778, summary y = 786..942 with enlarged 38px/32px typography!)
+    // PART 2: Asia Open (y = 550..732, summary y = 742..928)
     const asiaActive = activeStage === 1;
-    drawCleanIndexCard(ctx, xLeft, 570, colW, 208, data.asiaIndices[0], localF, timing.asiaStart, 'left', {
+    drawCleanIndexCard(ctx, xLeft, 550, colW, 182, data.asiaIndices[0], localF, timing.asiaStart, 'left', {
       light: false,
       polished: true,
       activeGlow: asiaActive,
     });
-    drawCleanIndexCard(ctx, xRight, 570, colW, 208, data.asiaIndices[1], localF, timing.asiaStart + 4, 'right', {
+    drawCleanIndexCard(ctx, xRight, 550, colW, 182, data.asiaIndices[1], localF, timing.asiaStart + 4, 'right', {
       light: false,
       polished: true,
       activeGlow: asiaActive,
@@ -628,25 +619,27 @@ export function renderMarketChronoBoardScene(
     drawTypewriterSummaryStrip(
       ctx,
       xLeft,
-      786,
+      742,
       fullW,
-      156,
+      186,
       '#34D399',
       data.asiaHeadline,
       data.asiaReason,
       localF,
-      timing.asiaStart + 10,
-      timing.asiaTypeStart,
-      timing.asiaTypeEnd,
-      38,
-      32,
+      timing.asiaStart + 4,
+      timing.asiaStart + 4,
+      timing.asiaStart + 4,
+      40,
+      35,
       undefined,
       false,
       true,
-      asiaActive
+      asiaActive,
+      true,
+      50
     );
 
-    // PART 3: Commodities (y = 954..1206, height = 252 with enlarged 37px title + 31px 2-line explanation!)
+    // PART 3: Commodities (y = 942..1304, height = 362 with 2x2 big commodity cards + 35px/50px text)
     const comActive = activeStage === 2;
     const thresholdPct = data.anomalyThresholdPct ?? 2.5;
     const anomalies = selectAnomalousCommodities(data.commodityWatchlist, thresholdPct);
@@ -655,18 +648,18 @@ export function renderMarketChronoBoardScene(
       .filter((c): c is CleanIndexChartItem => Boolean(c));
 
     if (anomCharts.length >= 2) {
-      drawCleanIndexCard(ctx, xLeft, 954, colW, 252, anomCharts[0], localF, timing.commodityStart, 'left', {
+      drawCleanIndexCard(ctx, xLeft, 942, colW, 362, anomCharts[0], localF, timing.commodityStart, 'left', {
         light: false,
         polished: true,
         activeGlow: comActive,
       });
-      drawCleanIndexCard(ctx, xRight, 954, colW, 252, anomCharts[1], localF, timing.commodityStart + 4, 'right', {
+      drawCleanIndexCard(ctx, xRight, 942, colW, 362, anomCharts[1], localF, timing.commodityStart + 4, 'right', {
         light: false,
         polished: true,
         activeGlow: comActive,
       });
     } else if (anomCharts.length === 1) {
-      drawCleanIndexCard(ctx, xLeft, 954, fullW, 252, anomCharts[0], localF, timing.commodityStart, 'up', {
+      drawCleanIndexCard(ctx, xLeft, 942, fullW, 362, anomCharts[0], localF, timing.commodityStart, 'up', {
         light: false,
         polished: true,
         activeGlow: comActive,
@@ -675,25 +668,22 @@ export function renderMarketChronoBoardScene(
       drawCompactPolishedCommodityCard(
         ctx,
         xLeft,
-        954,
+        942,
         fullW,
-        252,
+        362,
         data,
         thresholdPct,
         localF,
         timing.commodityStart,
-        timing.commodityTypeStart,
-        timing.commodityTypeEnd,
         comActive
       );
     }
 
-    // PART 4: A50 Oversized Hero Card (y = 1218..1694, height = 476, leaving 226px Douyin bottom safe zone!)
-    drawCleanIndexCard(ctx, xLeft, 1218, fullW, 476, data.a50Hero, localF, timing.a50Start, 'bottom', {
+    // PART 4: A50 Oversized Hero Card (y = 1318..1786, height = 468, leaving 134px bottom safe space)
+    drawCleanIndexCard(ctx, xLeft, 1318, fullW, 468, data.a50Hero, localF, timing.a50Start, 'bottom', {
       accentColorOverride: '#FBBF24',
       heroShapeNote: data.a50Hero.intradayShapeNote,
-      heroNoteStartFrame: timing.a50NoteStart,
-      heroNoteEndFrame: timing.a50NoteEnd,
+      heroInstantReveal: true,
       light: false,
       polished: true,
       activeGlow: activeStage === 3,

@@ -4,7 +4,7 @@
   "date": "2026-11-26",
   "title": "11月26号盘前一览（纯黑精修实拍反转版）",
   "seriesTitle": "11月26号盘前一览",
-  "description": "全新实拍双切情绪反转2.6秒开场（熬夜盯盘崩盘→早上醒来深V狂欢） + 四边抖音安全留白 + 精细化日K/分时盘前看板 + 三大海报定制级原生视觉动效 + 122BPM震撼音效。",
+  "description": "全新实拍双切情绪反转2.6秒开场 + 四边抖音安全留白 + 大字号涨跌幅与分时盘前看板 + 三大海报原生视觉动效 + 末屏纯黑纯文字一图全景汇总 + 122BPM震撼音效。",
   "spec": {
     "width": 1080,
     "height": 1920,
@@ -1339,6 +1339,112 @@
         "bottomTicker": "关注载人航天推进与太空AI基建催化，留意“审批≠全部落地”兑现节奏",
         "disclaimer": "客观产业催化与风险梳理 · 仅供信息参考，不构成任何投资建议",
         "safeInset": true
+      }
+    },
+    {
+      "id": "v4-06-text-summary",
+      "kind": "text_summary_board",
+      "durationFrames": 210,
+      "title": "盘前核心汇总（纯黑纯文字 · 一图全览可截屏保存）",
+      "subtitle": "宏观 / AI算力 / 商业航天 / 机器人四大板块浓缩于一页：去掉【】杂框，加入分组色标、数字高亮与分段渐入动效，末尾留足阅读窗方便暂停或截屏",
+      "editorialCraft": "纯黑高对比排版 + 语义数字染色 + 自动适应安全区字号 + 瀑布流卡片渐入与取景框微呼吸动效",
+      "focusGoal": "一屏清晰读完今日宏观盘面与三大产业核心要点，清晰易读且方便截屏留存",
+      "data": {
+        "theme": "dark",
+        "safeInset": true,
+        "anomalyThresholdPct": 2.5,
+        "headerTag": "SUMMARY · 全景文字汇总",
+        "title": "盘前全篇汇总 · 一图看懂",
+        "subtitleCue": "可暂停 · 截屏保存",
+        "sections": [
+          {
+            "id": "macro",
+            "indexLabel": "01",
+            "title": "宏观",
+            "englishTag": "MACRO & MARKETS",
+            "accentColor": "#38BDF8",
+            "enterFrame": 4,
+            "rows": [
+              {
+                "label": "美债",
+                "text": "加息 25BP/12月/97.2%（前值97.5%）· 春季前多次加息，加1%",
+                "tone": "cyan"
+              },
+              {
+                "label": "美股",
+                "text": "纳指 休市 ｜ 费半 休市（上一个交易日 -0.65%）",
+                "tone": "cyan",
+                "highlightAnomalies": true
+              },
+              {
+                "label": "期货",
+                "text": "黄金 3593（昨天 3597.3）｜ 原油 91.7（昨天 90.81）",
+                "tone": "cyan"
+              },
+              {
+                "label": "亚太指数",
+                "text": "韩 0.88% ｜ 日 0.16% ｜ 富时A50 0.25%（日盘）/ 夜盘 -0.02%",
+                "tone": "cyan",
+                "highlightAnomalies": true
+              },
+              {
+                "label": "世界当下重点",
+                "text": "复盘：今天政策底救市",
+                "tone": "gold"
+              },
+              {
+                "label": "世界未来重点",
+                "text": "黄仁勋出席国会听证 / 美国国会更多的产业法案出台 / 中东局势",
+                "tone": "warn"
+              }
+            ]
+          },
+          {
+            "id": "ai-compute",
+            "indexLabel": "02",
+            "title": "AI算力",
+            "englishTag": "AI COMPUTE",
+            "accentColor": "#F87171",
+            "enterFrame": 24,
+            "bullets": [
+              { "text": "英伟达芯片卖家争相寻找买家", "tone": "warn" },
+              { "text": "人工智能股票的最大隐忧：芯片过剩", "tone": "warn" },
+              { "text": "SpaceX被曝下调Blackwell GPU租金最高约35%，并低价转租Anthropic退还的H200芯片", "tone": "cyan" },
+              { "text": "CoreWeave和英伟达信用风险指标创新高", "tone": "up" },
+              { "text": "高端PCB排单延至2028年，算力赛道带动产业链扩产", "tone": "down" }
+            ],
+            "analysis": {
+              "label": "分析",
+              "text": "美股的算力风险并没有出清结束，明天算力是否能妥善离场未知"
+            }
+          },
+          {
+            "id": "aerospace",
+            "indexLabel": "03",
+            "title": "商业航天",
+            "englishTag": "AEROSPACE",
+            "accentColor": "#FBBF24",
+            "enterFrame": 46,
+            "bullets": [
+              { "text": "神舟二十四号载人飞船发射取得圆满成功，两个乘组航天员会师太空", "tone": "gold" },
+              { "text": "FCC批准SpaceX百万卫星太空AI数据中心计划", "tone": "cyan" }
+            ]
+          },
+          {
+            "id": "robotics",
+            "indexLabel": "04",
+            "title": "机器人",
+            "englishTag": "ROBOTICS & EVTOL",
+            "accentColor": "#34D399",
+            "enterFrame": 62,
+            "bullets": [
+              { "text": "何小鹏：全球首张有人驾驶eVTOL TC认证进入最后阶段", "tone": "down" },
+              { "text": "小鹏人机机器人IRON将于明年1月进入硬件量产", "tone": "down" },
+              { "text": "特斯拉机器人视频展示机器人打螺丝", "tone": "cyan" }
+            ]
+          }
+        ],
+        "footerNote": "纯文字全景汇总 · 客观梳理市场公开信息，仅供阅读参考，不构成投资建议"
       }
     }
   ]

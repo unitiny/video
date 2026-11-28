@@ -471,6 +471,45 @@ export interface V3ActionCheatsheetData {
   disclaimer?: string;
 }
 
+export interface TextSummaryMacroRow {
+  label: string;
+  text: string;
+  tone?: 'gold' | 'cyan' | 'up' | 'down' | 'warn' | 'neutral';
+  /** Highlight any index move exceeding anomalyThresholdPct (e.g., bold + red/green) */
+  highlightAnomalies?: boolean;
+}
+
+export interface TextSummaryBulletItem {
+  text: string;
+  tone?: 'gold' | 'cyan' | 'up' | 'down' | 'warn' | 'neutral';
+}
+
+export interface TextSummarySection {
+  id: string;
+  indexLabel?: string;
+  title: string;
+  englishTag?: string;
+  accentColor: string;
+  enterFrame: number;
+  rows?: TextSummaryMacroRow[];
+  bullets?: TextSummaryBulletItem[];
+  analysis?: {
+    label: string;
+    text: string;
+  };
+}
+
+export interface TextSummaryBoardData {
+  theme?: 'dark';
+  safeInset?: boolean;
+  headerTag?: string;
+  title: string;
+  subtitleCue?: string;
+  anomalyThresholdPct?: number;
+  sections: TextSummarySection[];
+  footerNote?: string;
+}
+
 export type EpisodeAudioMood =
   | 'tense_pulse'
   | 'editorial_lofi'
@@ -496,7 +535,8 @@ export type EpisodeSceneKind =
   | 'v3_market_pulse'
   | 'v3_ashare_anchor'
   | 'v3_editorial_story'
-  | 'v3_action_cheatsheet';
+  | 'v3_action_cheatsheet'
+  | 'text_summary_board';
 
 export interface EpisodeSceneBase {
   id: string;
@@ -522,7 +562,8 @@ export type EpisodeScene =
   | (EpisodeSceneBase & { kind: 'v3_market_pulse'; data: V3MarketPulseData })
   | (EpisodeSceneBase & { kind: 'v3_ashare_anchor'; data: V3AShareAnchorData })
   | (EpisodeSceneBase & { kind: 'v3_editorial_story'; data: V3EditorialStoryData })
-  | (EpisodeSceneBase & { kind: 'v3_action_cheatsheet'; data: V3ActionCheatsheetData });
+  | (EpisodeSceneBase & { kind: 'v3_action_cheatsheet'; data: V3ActionCheatsheetData })
+  | (EpisodeSceneBase & { kind: 'text_summary_board'; data: TextSummaryBoardData });
 
 export interface EpisodeSpec {
   width: number;

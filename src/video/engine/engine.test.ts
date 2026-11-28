@@ -286,26 +286,30 @@ test('2026-11-26-v3 flagship episode compiles 7 scenes, verifies assets on disk,
   assert.equal(mixed.right.length, bgm.right.length);
 });
 
-test('2026-11-26-v4 refined pure-black episode compiles 5 scenes, loads real meme hook & 3 posters, synthesizes cinema_impact audio, and passes strict validation', () => {
+test('2026-11-26-v4 refined pure-black episode compiles 6 scenes, loads real meme hook & 3 posters, includes pure-text summary finale, synthesizes cinema_impact audio, and passes strict validation', () => {
   const epV4Path = path.join(PROJECT_ROOT, 'episodes', '2026-11-26-v4', 'episode.json');
   const epV4 = JSON.parse(fs.readFileSync(epV4Path, 'utf8')) as EpisodeManifest;
 
   const tl = compileEpisodeTimeline(epV4);
-  assert.equal(tl.shots.length, 5);
-  assert.equal(tl.totalFrames, 1218);
+  assert.equal(tl.shots.length, 6);
+  assert.equal(tl.totalFrames, 1428);
   assert.equal(tl.bpm, 122);
   assert.equal(tl.shots[0].kind, 'hook_live_video');
   assert.equal(tl.shots[1].kind, 'market_chrono_board');
   assert.equal(tl.shots[2].kind, 'animated_poster_stage');
   assert.equal(tl.shots[3].kind, 'animated_poster_stage');
   assert.equal(tl.shots[4].kind, 'animated_poster_stage');
+  assert.equal(tl.shots[5].kind, 'text_summary_board');
 
   if (tl.shots[0].scene.kind === 'hook_live_video') {
     assert.equal(tl.shots[0].scene.data.hookStyle, 'v4_reversal_cut');
   }
+  if (tl.shots[5].scene.kind === 'text_summary_board') {
+    assert.equal(tl.shots[5].scene.data.sections.length, 4);
+  }
 
   const v4Styles = tl.shots
-    .slice(2)
+    .slice(2, 5)
     .map((s) => (s.scene.kind === 'animated_poster_stage' ? s.scene.data.presentationStyle : undefined));
   assert.deepEqual(v4Styles, ['v4_slice_inflation', 'v4_slice_compute', 'v4_slice_aerospace']);
 

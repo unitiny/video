@@ -341,12 +341,14 @@ function synthesizeCinemaImpactAudioPcm(
     } else if (shot.scene.kind === 'market_chrono_board') {
       shotRanges.push({ start: sStart, end: sEnd, energy: 0.96, fullDrums: true });
       const timing = resolveMarketBoardTiming(shot.scene.data.timing);
-      typeWindows.push(
-        [(base + timing.usTypeStart) / fps, (base + timing.usTypeEnd) / fps],
-        [(base + timing.asiaTypeStart) / fps, (base + timing.asiaTypeEnd) / fps],
-        [(base + timing.commodityTypeStart) / fps, (base + timing.commodityTypeEnd) / fps],
-        [(base + timing.a50NoteStart) / fps, (base + timing.a50NoteEnd) / fps]
-      );
+      if (!shot.scene.data.safeInset) {
+        typeWindows.push(
+          [(base + timing.usTypeStart) / fps, (base + timing.usTypeEnd) / fps],
+          [(base + timing.asiaTypeStart) / fps, (base + timing.asiaTypeEnd) / fps],
+          [(base + timing.commodityTypeStart) / fps, (base + timing.commodityTypeEnd) / fps],
+          [(base + timing.a50NoteStart) / fps, (base + timing.a50NoteEnd) / fps]
+        );
+      }
       chimeEvents.push(
         { t: (base + timing.usStart + 3) / fps, freq: 523.25, gain: 0.16 },
         { t: (base + timing.asiaStart + 2) / fps, freq: 587.33, gain: 0.16 },
@@ -406,6 +408,13 @@ function synthesizeCinemaImpactAudioPcm(
           chimeEvents.push({ t: (base + b.enterFrame) / fps, freq: 523.25 + idx * 80, gain: 0.16 });
         });
       }
+    } else if (shot.scene.kind === 'text_summary_board') {
+      shotRanges.push({ start: sStart, end: sEnd, energy: 0.85, fullDrums: true });
+      whooshEvents.push({ t: (base + 1) / fps, pitch: 820 });
+      chimeEvents.push(
+        { t: (base + 4) / fps, freq: 587.33, gain: 0.18 },
+        { t: (base + 9) / fps, freq: 880.0, gain: 0.2 }
+      );
     } else {
       shotRanges.push({ start: sStart, end: sEnd, energy: 1.0, fullDrums: true });
     }

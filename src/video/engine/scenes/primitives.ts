@@ -425,13 +425,15 @@ export function drawChangePctHeroBox(
   // Wayfinding chevron direction & color: Red upward for gains, Green downward for losses
   const dir = isPos ? -1 : 1; // -1 = up, +1 = down
   const chevRgb = isPos ? '239, 68, 68' : '16, 185, 129';
+  const brightChevRgb = isPos ? '248, 113, 113' : '52, 211, 153';
+  const elapsed = Math.max(0, localF - enterFrame);
 
   ctx.save();
   ctx.fillStyle = light
     ? heroMode
       ? 'rgba(255, 255, 255, 0.88)'
       : '#F8FAFC'
-    : 'rgba(7, 11, 18, 0.84)';
+    : 'rgba(7, 11, 18, 0.88)';
   roundRect(ctx, x, y, w, h, 10);
   ctx.fill();
 
@@ -441,52 +443,93 @@ export function drawChangePctHeroBox(
       : '#E2E8F0'
     : heroMode
       ? 'rgba(251, 191, 36, 0.25)'
-      : 'rgba(255, 255, 255, 0.08)';
+      : `rgba(${chevRgb}, 0.16)`;
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // Clip animated 3-chevron backdrop cleanly inside the tile
+  // Clip continuous scrolling kinetic chevron motion lens cleanly inside the tile
   ctx.save();
   roundRect(ctx, x + 1, y + 1, Math.max(1, w - 2), Math.max(1, h - 2), 9);
   ctx.clip();
 
-  // Subtle tinted ambient wash aligned with direction
+  // Subtle slow-breathing directional ambient tint wash
+  const ambientPulse = 0.5 + 0.5 * Math.sin(elapsed * 0.06);
   const tintGrad = ctx.createLinearGradient(0, isPos ? y + h : y, 0, isPos ? y : y + h);
-  tintGrad.addColorStop(0, `rgba(${chevRgb}, 0.01)`);
-  tintGrad.addColorStop(1, `rgba(${chevRgb}, ${light ? 0.08 : 0.09})`);
+  tintGrad.addColorStop(0, `rgba(${chevRgb}, ${(light ? 0.02 : 0.02 + ambientPulse * 0.02).toFixed(3)})`);
+  tintGrad.addColorStop(0.55, `rgba(${chevRgb}, ${(light ? 0.05 : 0.055 + ambientPulse * 0.03).toFixed(3)})`);
+  tintGrad.addColorStop(1, `rgba(${chevRgb}, ${(light ? 0.08 : 0.1 + ambientPulse * 0.04).toFixed(3)})`);
   ctx.fillStyle = tintGrad;
   ctx.fillRect(x, y, w, h);
 
-  // Triple stacked chevron arrowheads ("只要箭头顶端那3个箭头向上延伸的效果", NO stem)
+  // Understated vertical speed streaks gliding slowly in trend direction
+  const streakXs = [0.11, 0.23, 0.77, 0.89];
+  const streakLen = Math.round(h * 0.38);
+  const streakSpeed = heroMode ? 0.015 : 0.017;
+  for (let si = 0; si < streakXs.length; si++) {
+    const sp = (elapsed * streakSpeed + si * 0.27) % 1;
+    const syCenter =
+      dir === -1
+        ? lerp(y + h + streakLen * 0.5, y - streakLen * 0.5, sp)
+        : lerp(y - streakLen * 0.5, y + h + streakLen * 0.5, sp);
+    const sFade = Math.sin(sp * Math.PI);
+    const sx = x + w * streakXs[si];
+    const sGrad = ctx.createLinearGradient(sx, syCenter - streakLen * 0.5, sx, syCenter + streakLen * 0.5);
+    sGrad.addColorStop(0, `rgba(${brightChevRgb}, 0)`);
+    sGrad.addColorStop(0.5, `rgba(${brightChevRgb}, ${(sFade * (light ? 0.1 : 0.14)).toFixed(3)})`);
+    sGrad.addColorStop(1, `rgba(${brightChevRgb}, 0)`);
+    ctx.strokeStyle = sGrad;
+    ctx.lineWidth = heroMode ? 2.2 : 1.5;
+    ctx.beginPath();
+    ctx.moveTo(sx, syCenter - streakLen * 0.5);
+    ctx.lineTo(sx, syCenter + streakLen * 0.5);
+    ctx.stroke();
+  }
+
+  // Calm slow-scrolling conveyor of 3 wide chevron bands behind digits
   const cx = x + w / 2;
-  const cy = y + h * (heroMode ? 0.56 : 0.57);
-  const halfW = Math.min(w * 0.31, heroMode ? 96 : 58);
-  const tipH = Math.round(h * (heroMode ? 0.145 : 0.175));
-  const stepGap = Math.round(h * (heroMode ? 0.21 : 0.22));
-  const animClock = Math.max(0, localF - enterFrame) * 0.13;
-  // Gentle synchronized forward nudge in trend direction
-  const drift = dir * ((Math.sin(animClock) * 0.5 + 0.5) * (heroMode ? 9 : 5));
+  const halfW = Math.min(w * 0.38, heroMode ? 120 : 74);
+  const tipH = Math.round(h * (heroMode ? 0.19 : 0.23));
+  const bandH = Math.round(h * (heroMode ? 0.105 : 0.14));
+  const cycleSpeed = heroMode ? 0.01 : 0.012;
 
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  ctx.lineWidth = heroMode ? 7.5 : 5;
+  ctx.lineWidth = heroMode ? 3.5 : 2.5;
 
-  // Order slots 0 -> 1 -> 2 from tail to tip along travel direction (`dir`)
   for (let slot = 0; slot < 3; slot++) {
-    const slotOffsetFromCenter = (1 - slot) * (-dir * stepGap);
-    const arrowY = cy + slotOffsetFromCenter + drift;
-    // Sequential directional pulse wave (tail -> middle -> tip) like road guide chevrons
-    const wave = Math.pow(0.5 + 0.5 * Math.sin(animClock - slot * 1.25), 1.45);
-    const baseAlpha = light ? 0.07 : 0.08;
-    const pulseAlpha = light ? 0.11 : 0.135;
-    const tierBoost = slot === 2 ? 1.12 : slot === 1 ? 1.0 : 0.88;
-    const alpha = clamp((baseAlpha + pulseAlpha * wave) * tierBoost, 0.05, 0.24);
+    const phase = (elapsed * cycleSpeed + slot / 3) % 1;
+    const arrowY =
+      dir === -1
+        ? lerp(y + h + tipH * 0.85, y - tipH * 0.85, phase)
+        : lerp(y - tipH * 0.85, y + h + tipH * 0.85, phase);
 
-    ctx.strokeStyle = `rgba(${chevRgb}, ${alpha.toFixed(3)})`;
+    const edgeFade = Math.sin(phase * Math.PI);
+    const fillAlpha = clamp(edgeFade * (light ? 0.1 : 0.15), 0, 0.18);
+    const strokeAlpha = clamp(edgeFade * (light ? 0.18 : 0.25), 0, 0.28);
+
+    const leadCenterY = arrowY + dir * (tipH * 0.5);
+    const trailCenterY = leadCenterY - dir * bandH;
+    const wingLeadY = arrowY - dir * (tipH * 0.5);
+    const wingTrailY = wingLeadY - dir * bandH;
+
+    // Soft filled chevron arrowhead band
+    ctx.fillStyle = `rgba(${chevRgb}, ${fillAlpha.toFixed(3)})`;
     ctx.beginPath();
-    ctx.moveTo(cx - halfW, arrowY - dir * (tipH * 0.5));
-    ctx.lineTo(cx, arrowY + dir * (tipH * 0.5));
-    ctx.lineTo(cx + halfW, arrowY - dir * (tipH * 0.5));
+    ctx.moveTo(cx - halfW, wingLeadY);
+    ctx.lineTo(cx, leadCenterY);
+    ctx.lineTo(cx + halfW, wingLeadY);
+    ctx.lineTo(cx + halfW, wingTrailY);
+    ctx.lineTo(cx, trailCenterY);
+    ctx.lineTo(cx - halfW, wingTrailY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Gentle leading edge stroke
+    ctx.strokeStyle = `rgba(${brightChevRgb}, ${strokeAlpha.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.moveTo(cx - halfW, wingLeadY);
+    ctx.lineTo(cx, leadCenterY);
+    ctx.lineTo(cx + halfW, wingLeadY);
     ctx.stroke();
   }
   ctx.restore();
@@ -498,7 +541,7 @@ export function drawChangePctHeroBox(
   ctx.fillStyle = light ? (heroMode ? '#92400E' : '#475569') : accentLabel;
   ctx.fillText('涨跌幅', x + 10, y + 6);
 
-  // Giant bold percentage readout centered cleanly over the subtle chevrons
+  // Giant bold percentage readout centered cleanly with dark outline halo over moving chevrons
   const charCount = displayText.length;
   const baseFontSize = heroMode
     ? charCount >= 7
@@ -511,9 +554,15 @@ export function drawChangePctHeroBox(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.font = `900 ${baseFontSize}px ${MONO}`;
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+
+  ctx.lineWidth = heroMode ? 14 : 10;
+  ctx.strokeStyle = light ? 'rgba(255, 255, 255, 0.92)' : 'rgba(5, 8, 16, 0.94)';
+  ctx.strokeText(displayText, x + w / 2, y + h * 0.58, w - 16);
 
   if (!light) {
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.82)';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.88)';
     ctx.shadowBlur = 14;
     ctx.shadowOffsetY = 3;
   }
@@ -802,6 +851,7 @@ export interface CleanIndexCardOptions {
   heroShapeNote?: string;
   heroNoteStartFrame?: number;
   heroNoteEndFrame?: number;
+  heroInstantReveal?: boolean;
   light?: boolean;
   /** Refined obsidian glass surface + top specular rim */
   polished?: boolean;
@@ -829,6 +879,7 @@ export function drawCleanIndexCard(
   const light = Boolean(options?.light);
   const polished = Boolean(options?.polished);
   const activeGlow = Boolean(options?.activeGlow);
+  const heroInstant = Boolean(options?.heroInstantReveal);
   const p = getCardEnterProgress(localF, enterFrame, 16);
   const e = easeOutCubic(p);
   const heroShapeNote = options?.heroShapeNote;
@@ -913,10 +964,12 @@ export function drawCleanIndexCard(
     ctx.fillRect(x + 18, y + 1, w - 36, 1.5);
   }
 
-  // Left accent bar
-  ctx.fillStyle = pctColor;
-  roundRect(ctx, x, y + 14, isHero ? 8 : 6, h - 28, 4);
-  ctx.fill();
+  // Left accent bar (omitted in polished dark mode for sleek uncluttered left edge)
+  if (!polished || light) {
+    ctx.fillStyle = pctColor;
+    roundRect(ctx, x, y + 14, isHero ? 8 : 6, h - 28, 4);
+    ctx.fill();
+  }
 
   // Clean Top Row: ONLY Enlarged Index Title (percentage moved to large left hero tile)
   const headerCenterY = isHero ? 44 : isCompact ? 29 : 35;
@@ -944,7 +997,7 @@ export function drawCleanIndexCard(
   // Content Row: Left Giant Percentage Tile (with 3-chevron arrow backdrop) + Right Full-Day 分时
   const padX = isHero ? 24 : 14;
   const chartTop = y + (isHero ? 88 : isCompact ? 54 : 68);
-  const chartH = isHero ? h - 202 : h - (isCompact ? 66 : 82);
+  const chartH = isHero ? (heroInstant ? h - 226 : h - 202) : h - (isCompact ? 66 : 82);
   const kW = isHero ? 336 : Math.min(286, Math.round((w - padX * 2 - 10) * 0.42));
   const intraW = w - padX * 2 - kW - (isHero ? 14 : 10);
 
@@ -985,30 +1038,54 @@ export function drawCleanIndexCard(
   );
 
   if (heroShapeNote) {
-    const noteStart = options?.heroNoteStartFrame ?? enterFrame + 30;
-    const noteEnd = options?.heroNoteEndFrame ?? noteStart + 32;
-    const noteRes = sliceTypewriterText(heroShapeNote, localF, noteStart, noteEnd);
-    const noteSize = polished ? 36 : 36;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.font = `800 ${noteSize}px ${FONT}`;
-    ctx.fillStyle = light ? '#92400E' : '#FDE68A';
-    const caret = noteRes.typing && Math.floor(localF / 7) % 2 === 0 ? ' ▌' : '';
-    drawWrappedText(
-      ctx,
-      noteRes.visible + caret,
-      x + 26,
-      y + h - 98,
-      w - 52,
-      noteSize + 8
-    );
+    if (heroInstant) {
+      const noteEnter = enterFrame + 4;
+      if (localF >= noteEnter) {
+        const revealT = easeOutCubic(clamp((localF - noteEnter) / 14, 0, 1));
+        const noteSize = 39;
+        ctx.save();
+        ctx.globalAlpha *= revealT;
+        ctx.translate(0, lerp(18, 0, revealT));
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.font = `800 ${noteSize}px ${FONT}`;
+        ctx.fillStyle = light ? '#92400E' : '#FDE68A';
+        drawWrappedText(
+          ctx,
+          heroShapeNote,
+          x + 26,
+          y + h - 124,
+          w - 52,
+          53
+        );
+        ctx.restore();
+      }
+    } else {
+      const noteStart = options?.heroNoteStartFrame ?? enterFrame + 30;
+      const noteEnd = options?.heroNoteEndFrame ?? noteStart + 32;
+      const noteRes = sliceTypewriterText(heroShapeNote, localF, noteStart, noteEnd);
+      const noteSize = 36;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.font = `800 ${noteSize}px ${FONT}`;
+      ctx.fillStyle = light ? '#92400E' : '#FDE68A';
+      const caret = noteRes.typing && Math.floor(localF / 7) % 2 === 0 ? ' ▌' : '';
+      drawWrappedText(
+        ctx,
+        noteRes.visible + caret,
+        x + 26,
+        y + h - 98,
+        w - 52,
+        noteSize + 8
+      );
+    }
   }
 
   ctx.restore();
 }
 
 /**
- * Typewriter-animated editorial summary strip below each market row
+ * Typewriter-animated or instant slide-in editorial summary strip below each market row
  */
 export function drawTypewriterSummaryStrip(
   ctx: CanvasRenderingContext2D,
@@ -1028,21 +1105,32 @@ export function drawTypewriterSummaryStrip(
   holdPauseUntilFrame?: number,
   light = false,
   polished = false,
-  activeGlow = false
+  activeGlow = false,
+  instantReveal = false,
+  lineSpacing?: number
 ): void {
   if (localF < titleFrame) return;
 
-  const enterT = easeOutCubic(clamp((localF - titleFrame) / 10, 0, 1));
-  const typed = sliceTypewriterText(reasonText, localF, typeStartFrame, typeEndFrame);
+  const enterT = easeOutCubic(clamp((localF - titleFrame) / (instantReveal ? 14 : 10), 0, 1));
+  const typed = instantReveal
+    ? { visible: reasonText, typing: false }
+    : sliceTypewriterText(reasonText, localF, typeStartFrame, typeEndFrame);
   const showHoldCursor =
+    !instantReveal &&
     holdPauseUntilFrame !== undefined &&
     localF >= typeEndFrame &&
     localF < holdPauseUntilFrame &&
     Math.floor(localF / 10) % 2 === 0;
-  const caret = (typed.typing && Math.floor(localF / 6) % 2 === 0) || showHoldCursor ? '▌' : '';
+  const caret =
+    !instantReveal && ((typed.typing && Math.floor(localF / 6) % 2 === 0) || showHoldCursor)
+      ? '▌'
+      : '';
 
   ctx.save();
   ctx.globalAlpha = enterT;
+  if (instantReveal) {
+    ctx.translate(0, lerp(20, 0, enterT));
+  }
   if (light) {
     ctx.shadowColor = 'rgba(15, 23, 42, 0.06)';
     ctx.shadowBlur = 12;
@@ -1068,27 +1156,31 @@ export function drawTypewriterSummaryStrip(
   ctx.lineWidth = activeGlow ? 1.6 : 1;
   ctx.stroke();
 
-  ctx.fillStyle = accentColor;
-  roundRect(ctx, x, y + 10, 6, h - 20, 3);
-  ctx.fill();
+  if (!polished || light) {
+    ctx.fillStyle = accentColor;
+    roundRect(ctx, x, y + 10, 6, h - 20, 3);
+    ctx.fill();
+  }
 
-  const topPad = h <= 162 ? 10 : 12;
+  const topPad = instantReveal ? 14 : h <= 162 ? 10 : 12;
+  const titleGap = instantReveal ? 12 : h <= 162 ? 6 : 8;
+  const bodyLH = lineSpacing ?? (instantReveal ? bodySize + 15 : bodySize + (h <= 162 ? 7 : 8));
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.font = `900 ${titleSize}px ${FONT}`;
   ctx.fillStyle = accentColor;
   ctx.fillText(title, x + 20, y + topPad);
 
-  if (localF >= typeStartFrame) {
+  if (instantReveal || localF >= typeStartFrame) {
     ctx.font = `600 ${bodySize}px ${FONT}`;
     ctx.fillStyle = light ? '#1E293B' : '#F1F5F9';
     drawWrappedText(
       ctx,
       typed.visible + caret,
       x + 20,
-      y + topPad + titleSize + (h <= 162 ? 6 : 8),
+      y + topPad + titleSize + titleGap,
       w - 38,
-      bodySize + (h <= 162 ? 7 : 8)
+      bodyLH
     );
   }
   ctx.restore();

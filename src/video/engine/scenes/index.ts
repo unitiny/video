@@ -11,6 +11,7 @@ import { renderEventFlowFunnelScene } from './EventFlowFunnelScene';
 import { renderEventTimelineScene } from './EventTimelineScene';
 import { renderHookLiveVideoScene } from './HookLiveVideoScene';
 import { renderMarketChronoBoardScene } from './MarketChronoBoardScene';
+import { renderTextSummaryBoardScene } from './TextSummaryBoardScene';
 import { renderV3AShareAnchorScene } from './V3AShareAnchorScene';
 import { renderV3ActionCheatsheetScene } from './V3ActionCheatsheetScene';
 import { renderV3ConflictHookScene } from './V3ConflictHookScene';
@@ -24,6 +25,7 @@ export * from './v3BrandChrome';
 export { renderAnimatedPosterStageScene } from './AnimatedPosterStageScene';
 export { renderHookLiveVideoScene } from './HookLiveVideoScene';
 export { renderMarketChronoBoardScene } from './MarketChronoBoardScene';
+export { renderTextSummaryBoardScene } from './TextSummaryBoardScene';
 export { renderEventFlowFunnelScene } from './EventFlowFunnelScene';
 export { renderEventDualSpotlightScene } from './EventDualSpotlightScene';
 export { renderEventTimelineScene } from './EventTimelineScene';
@@ -125,6 +127,9 @@ export function renderEpisodeFrame(
       break;
     case 'v3_action_cheatsheet':
       renderV3ActionCheatsheetScene(rc, scene.data);
+      break;
+    case 'text_summary_board':
+      renderTextSummaryBoardScene(rc, scene.data);
       break;
   }
 }
