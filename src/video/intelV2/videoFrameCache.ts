@@ -17,9 +17,11 @@ export function loadRealVideoFrameCache(
   outH = 854,
   onPartialReady?: (partial: RealVideoCacheResult) => void,
   minSec = 0.05,
-  cropCenterRatio = 0.5
+  cropCenterRatio = 0.5,
+  timeoutMs = 20000
 ): Promise<RealVideoCacheResult> {
-  const existing = cacheBySrc.get(src);
+  const cacheKey = `${src}|${sampleCount}|${outW}x${outH}|${minSec}|${maxSec}|${cropCenterRatio}`;
+  const existing = cacheBySrc.get(cacheKey);
   if (existing) return existing;
 
   const promise = (async (): Promise<RealVideoCacheResult> => {
@@ -42,6 +44,7 @@ export function loadRealVideoFrameCache(
       const video = document.createElement('video');
       video.muted = true;
       video.playsInline = true;
+      video.setAttribute('webkit-playsinline', 'true');
       video.preload = 'auto';
       video.crossOrigin = 'anonymous';
       video.src = objectUrl ?? src;
@@ -63,7 +66,7 @@ export function loadRealVideoFrameCache(
 
       const timeoutId = setTimeout(() => {
         finish({ video, frames: [...frames] });
-      }, 20000);
+      }, timeoutMs);
 
       const captureCurrentFrame = (): HTMLCanvasElement | null => {
         if (!video.videoWidth || !video.videoHeight) return null;
@@ -158,6 +161,6 @@ export function loadRealVideoFrameCache(
     });
   })();
 
-  cacheBySrc.set(src, promise);
+  cacheBySrc.set(cacheKey, promise);
   return promise;
 }

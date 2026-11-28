@@ -24,7 +24,8 @@ function getCompiledShotAsset(shot: CompiledShot): string | null {
     scene.kind === 'event_flow_funnel' ||
     scene.kind === 'event_dual_spotlight' ||
     scene.kind === 'event_timeline' ||
-    scene.kind === 'animated_poster_stage'
+    scene.kind === 'animated_poster_stage' ||
+    scene.kind === 'v3_editorial_story'
   ) {
     return scene.data.imageSrc || null;
   }
@@ -42,7 +43,7 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({
         <div className="bg-white border border-neutral-200 rounded-xl p-8 text-center space-y-2">
           <h2 className="text-lg font-bold text-neutral-900">尚未加载每日动态剧集</h2>
           <p className="text-sm text-neutral-500">
-            请回到「逐帧播放器」选择一期剧集或点击刷新列表，也可以切换查看旧版存档分镜。
+            请回到「逐帧播放器」在上方 Tab 栏选择一期剧集或旧版存档版本查看分镜。
           </p>
         </div>
       );
@@ -113,6 +114,11 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({
                     <td className="py-4 px-4 min-w-[200px]">
                       <div className="font-semibold text-neutral-900">{shot.title}</div>
                       <div className="text-xs text-neutral-500 mt-1">{shot.subtitle}</div>
+                      {shot.scene.narration && (
+                        <div className="text-[11px] text-neutral-700 bg-amber-50/70 border border-amber-200/80 rounded px-2 py-1 mt-1.5 leading-relaxed">
+                          口播：{shot.scene.narration}
+                        </div>
+                      )}
                     </td>
                     <td className="py-4 px-4 min-w-[220px]">
                       <div className="text-xs text-neutral-800 leading-relaxed">

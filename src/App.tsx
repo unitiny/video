@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { QrCode } from 'lucide-react';
 import { ART_ASSETS, INTEL_ASSETS, INTEL_V2_ASSETS, INTEL_V2_VIDEO_SAMPLE } from './video/theme';
 import type { LoadedVideoImages } from './video/renderer/renderFrame';
 import type { LoadedIntelImages } from './video/intel/renderIntelFrame';
@@ -17,6 +18,11 @@ import {
 import { StoryboardView } from './components/StoryboardView';
 import { BlueprintView } from './components/BlueprintView';
 import { ExportModal } from './components/ExportModal';
+import { MobileFullscreenPreview } from './components/MobileFullscreenPreview';
+import {
+  MobileQrPreviewModal,
+  type UnifiedVideoTabItem,
+} from './components/MobileQrPreviewModal';
 
 type StudioTab = 'player' | 'storyboard' | 'blueprint';
 
@@ -36,11 +42,84 @@ function loadImageElement(src: string): Promise<HTMLImageElement | null> {
   });
 }
 
+function formatEpisodeTabLabel(ep: EpisodeListItem): string {
+  const md = /^\d{4}-(\d{2})-(\d{2})/.exec(ep.date);
+  const shortDate = md ? `${Number(md[1])}.${md[2]}` : ep.date;
+  if (ep.versionTag) return `${shortDate} ${ep.versionTag}`;
+  if (ep.id === '2026-11-26') return `${shortDate} 纯黑原版`;
+  if (ep.id === '2026-11-20') return `${shortDate} 动态剧集`;
+  return `${shortDate} ${ep.seriesTitle || ep.title}`.slice(0, 14);
+}
+
+const LEGACY_VIDEO_TABS: UnifiedVideoTabItem[] = [
+  {
+    key: 'mode:1120_v2',
+    label: '11.20 盘前风向（v2 精修爆款版）',
+    shortLabel: '11.20 v2 精修',
+    projectMode: '1120_v2',
+  },
+  {
+    key: 'mode:1120_intel',
+    label: '11.20 盘前风向（v1 存档版）',
+    shortLabel: '11.20 v1 存档',
+    projectMode: '1120_intel',
+  },
+  {
+    key: 'mode:1117_close',
+    label: '11.17 收盘资金流向复刻',
+    shortLabel: '1117 收盘复刻',
+    projectMode: '1117_close',
+  },
+  {
+    key: 'mode:morning_brief',
+    label: '11.19 盘前早报模板',
+    shortLabel: '1119 早报',
+    projectMode: 'morning_brief',
+  },
+];
+
+function readMobilePreviewParams(): {
+  isMobile: boolean;
+  episodeId?: string;
+  mode?: StudioProjectMode;
+} {
+  if (typeof window === 'undefined') return { isMobile: false };
+  const params = new URLSearchParams(window.location.search);
+  const isMobile = params.get('mobile') === '1' || params.get('mobile') === 'true';
+  if (!isMobile) return { isMobile: false };
+  const ep = params.get('episode')?.trim() || undefined;
+  const rawMode = params.get('mode')?.trim() as StudioProjectMode | undefined;
+  const validModes: StudioProjectMode[] = [
+    'episode',
+    '1120_v2',
+    '1120_intel',
+    '1117_close',
+    'morning_brief',
+  ];
+  const mode = rawMode && validModes.includes(rawMode) ? rawMode : ep ? 'episode' : 'episode';
+  return { isMobile: true, episodeId: ep, mode };
+}
+
 export default function App() {
+  const mobileParams = useMemo(() => readMobilePreviewParams(), []);
+  if (mobileParams.isMobile) {
+    return (
+      <MobileFullscreenPreview
+        episodeId={mobileParams.episodeId}
+        mode={mobileParams.mode}
+      />
+    );
+  }
+
+  return <DesktopStudioApp />;
+}
+
+function DesktopStudioApp() {
   const [activeTab, setActiveTab] = useState<StudioTab>('player');
   const [projectMode, setProjectMode] = useState<StudioProjectMode>('episode');
   const [currentFrame, setCurrentFrame] = useState<number>(0);
   const [isExportOpen, setIsExportOpen] = useState<boolean>(false);
+  const [isQrModalOpen, setIsQrModalOpen] = useState<boolean>(false);
   const [images, setImages] = useState<LoadedVideoImages>({});
   const [intelImages, setIntelImages] = useState<LoadedIntelImages>({});
 
@@ -303,6 +382,36 @@ export default function App() {
     setCurrentFrame(0);
   };
 
+  const unifiedVideoTabs = useMemo<UnifiedVideoTabItem[]>(() => {
+    const dynamicTabs: UnifiedVideoTabItem[] = episodes.map((ep) => ({
+      key: `ep:${ep.id}`,
+      label: `${ep.date} · ${ep.title}`,
+      shortLabel: formatEpisodeTabLabel(ep),
+      projectMode: 'episode',
+      episodeId: ep.id,
+    }));
+    return [...dynamicTabs, ...LEGACY_VIDEO_TABS];
+  }, [episodes]);
+
+  const activeUnifiedTab = useMemo<UnifiedVideoTabItem>(() => {
+    if (projectMode === 'episode' && selectedEpisodeId) {
+      const matched = unifiedVideoTabs.find(
+        (t) => t.projectMode === 'episode' && t.episodeId === selectedEpisodeId
+      );
+      if (matched) return matched;
+    }
+    const modeMatch = unifiedVideoTabs.find((t) => t.projectMode === projectMode);
+    return modeMatch ?? unifiedVideoTabs[0];
+  }, [unifiedVideoTabs, projectMode, selectedEpisodeId]);
+
+  const handleSelectUnifiedTab = (tab: UnifiedVideoTabItem) => {
+    if (tab.projectMode === 'episode' && tab.episodeId) {
+      handleSelectEpisode(tab.episodeId);
+    } else {
+      handleProjectModeChange(tab.projectMode);
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-[#F5F5F3] text-[#141518]">
       {/* Strict 3-Zone Top Bar Contract */}
@@ -345,7 +454,15 @@ export default function App() {
             })}
           </nav>
 
-          <div className="shrink-0">
+          <div className="shrink-0 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsQrModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-900 text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+            >
+              <QrCode className="w-3.5 h-3.5 text-[#C8342A]" />
+              <span>手机扫码预览</span>
+            </button>
             <button
               type="button"
               onClick={() => setIsExportOpen(true)}
@@ -373,6 +490,10 @@ export default function App() {
             onRefreshEpisodes={refreshEpisodes}
             activeEpisode={activeEpisode}
             episodeAssets={episodeAssets}
+            unifiedTabs={unifiedVideoTabs}
+            activeUnifiedTab={activeUnifiedTab}
+            onSelectUnifiedTab={handleSelectUnifiedTab}
+            onOpenQrPreview={() => setIsQrModalOpen(true)}
           />
         )}
 
@@ -403,6 +524,19 @@ export default function App() {
         intelImages={intelImages}
         activeEpisode={activeEpisode}
         episodeAssets={episodeAssets}
+      />
+
+      <MobileQrPreviewModal
+        isOpen={isQrModalOpen}
+        onClose={() => setIsQrModalOpen(false)}
+        activeTab={activeUnifiedTab}
+        allTabs={unifiedVideoTabs}
+        onSelectTab={handleSelectUnifiedTab}
+        activeEpisode={activeEpisode}
+        episodeAssets={episodeAssets}
+        images={images}
+        intelImages={intelImages}
+        episodes={episodes}
       />
     </div>
   );

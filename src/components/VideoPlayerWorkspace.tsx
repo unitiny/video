@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
+  Mic,
   Pause,
   Play,
-  RefreshCw,
+  QrCode,
   RotateCcw,
+  ShieldCheck,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -49,7 +51,9 @@ import {
   type CompiledShot,
 } from '../video/engine/timeline';
 import { synthesizeEpisodeAudioPcm } from '../video/engine/audioSynth';
-import { renderEpisodeFrame } from '../video/engine/scenes';
+import { drawPlatformSafeZoneOverlay, renderEpisodeFrame } from '../video/engine/scenes';
+import { parseJsonResponseSafe } from '../video/export/clientMp4Export';
+import type { UnifiedVideoTabItem } from './MobileQrPreviewModal';
 
 export type StudioProjectMode =
   | 'episode'
@@ -73,7 +77,8 @@ function getShotPreviewAsset(shot: CompiledShot): string | null {
     scene.kind === 'event_flow_funnel' ||
     scene.kind === 'event_dual_spotlight' ||
     scene.kind === 'event_timeline' ||
-    scene.kind === 'animated_poster_stage'
+    scene.kind === 'animated_poster_stage' ||
+    scene.kind === 'v3_editorial_story'
   ) {
     return scene.data.imageSrc || null;
   }
@@ -94,6 +99,10 @@ interface VideoPlayerWorkspaceProps {
   onRefreshEpisodes?: () => void;
   activeEpisode?: EpisodeManifest | null;
   episodeAssets?: LoadedEpisodeAssets;
+  unifiedTabs?: UnifiedVideoTabItem[];
+  activeUnifiedTab?: UnifiedVideoTabItem;
+  onSelectUnifiedTab?: (tab: UnifiedVideoTabItem) => void;
+  onOpenQrPreview?: () => void;
 }
 
 export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
@@ -110,10 +119,20 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
   onRefreshEpisodes,
   activeEpisode = null,
   episodeAssets = EMPTY_EPISODE_ASSETS,
+  unifiedTabs = [],
+  activeUnifiedTab,
+  onSelectUnifiedTab,
+  onOpenQrPreview,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [showSafeZone, setShowSafeZone] = useState(false);
+  const [voiceName, setVoiceName] = useState<'Charon' | 'Kore'>('Charon');
+  const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
+  const [voiceMessage, setVoiceMessage] = useState<string>('');
+  const [voiceError, setVoiceError] = useState<string>('');
+  const [voiceReadyNonce, setVoiceReadyNonce] = useState<number>(0);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioBufferCacheRef = useRef<Record<string, AudioBuffer>>({});
@@ -129,6 +148,19 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
   );
 
   const isEpisodeMode = projectMode === 'episode' && Boolean(activeEpisode && compiledTimeline);
+  const activeEpisodeMeta = useMemo(
+    () => (activeEpisode ? episodes.find((e) => e.id === activeEpisode.id) ?? null : null),
+    [activeEpisode, episodes]
+  );
+  const hasNarrationScripts = useMemo(
+    () =>
+      Boolean(
+        activeEpisode?.scenes.some(
+          (s) => typeof s.narration === 'string' && s.narration.trim().length > 0
+        )
+      ),
+    [activeEpisode]
+  );
   const isV2Mode = projectMode === '1120_v2';
   const isV1IntelMode = projectMode === '1120_intel';
   const isPortrait916 = projectMode === 'episode' || isV2Mode || isV1IntelMode;
@@ -230,6 +262,10 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
       const legacyId = projectMode === 'morning_brief' ? 'morning_brief' : '1117_close';
       renderVideoFrame(ctx, safeFrame, PROJECT_TEMPLATES[legacyId], images);
     }
+
+    if (showSafeZone && isPortrait916) {
+      drawPlatformSafeZoneOverlay(ctx, canvas.width, canvas.height);
+    }
   }, [
     safeFrame,
     projectMode,
@@ -239,9 +275,50 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
     episodesLoading,
     isV2Mode,
     isV1IntelMode,
+    isPortrait916,
+    showSafeZone,
     images,
     intelImages,
   ]);
+
+  const handleGenerateVoiceover = async () => {
+    if (!activeEpisode || isGeneratingVoice) return;
+    setIsPlaying(false);
+    setIsGeneratingVoice(true);
+    setVoiceError('');
+    setVoiceMessage('正在使用 Gemini TTS 逐幕合成中文主播配音并对齐时间轴...');
+    try {
+      const res = await fetch(
+        `/api/episodes/${encodeURIComponent(activeEpisode.id)}/voiceover`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ voiceName }),
+        }
+      );
+      const json = await parseJsonResponseSafe<{
+        ok?: boolean;
+        clipCount?: number;
+        error?: string;
+      }>(res);
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || 'AI 配音合成失败');
+      }
+      for (const key of Object.keys(audioBufferCacheRef.current)) {
+        if (key.startsWith(`episode:${activeEpisode.id}:`)) {
+          delete audioBufferCacheRef.current[key];
+        }
+      }
+      setVoiceReadyNonce((n) => n + 1);
+      setVoiceMessage(`已完成 ${json.clipCount ?? ''} 幕中文主播配音并自动启用背景音乐闪避（-13dB）`);
+      onRefreshEpisodes?.();
+    } catch (err) {
+      setVoiceMessage('');
+      setVoiceError(err instanceof Error ? err.message : 'AI 配音合成异常');
+    } finally {
+      setIsGeneratingVoice(false);
+    }
+  };
 
   const ensureAudioBuffer = async (): Promise<{ ctx: AudioContext; buf: AudioBuffer } | null> => {
     try {
@@ -256,27 +333,44 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
       if (ctx.state === 'suspended') {
         await ctx.resume();
       }
+      const hasServerVoice = Boolean(activeEpisodeMeta?.hasVoiceover || voiceReadyNonce > 0);
       const cacheKey =
         isEpisodeMode && activeEpisode && compiledTimeline
-          ? `episode:${activeEpisode.id}:${compiledTimeline.totalFrames}`
+          ? `episode:${activeEpisode.id}:${compiledTimeline.totalFrames}:v${hasServerVoice ? voiceReadyNonce + 1 : 0}`
           : isV2Mode
             ? '1120_v2'
             : isV1IntelMode
               ? '1120_intel'
               : '1117_legacy';
       if (!audioBufferCacheRef.current[cacheKey]) {
-        const pcm =
-          isEpisodeMode && activeEpisode
-            ? synthesizeEpisodeAudioPcm(activeEpisode, ctx.sampleRate)
-            : isV2Mode
-              ? synthesizeIntelV2TrackPcm(ctx.sampleRate, INTEL_V2_SPEC.durationSec)
-              : isV1IntelMode
-                ? synthesizeIntelTrackPcm(ctx.sampleRate, INTEL_VIDEO_SPEC.durationSec)
-                : synthesizeTrackPcm(ctx.sampleRate, VIDEO_SPEC.durationSec);
-        const buf = ctx.createBuffer(2, pcm.left.length, ctx.sampleRate);
-        buf.getChannelData(0).set(pcm.left);
-        buf.getChannelData(1).set(pcm.right);
-        audioBufferCacheRef.current[cacheKey] = buf;
+        if (isEpisodeMode && activeEpisode && hasServerVoice) {
+          try {
+            const wavRes = await fetch(
+              `/api/audio/bgm.wav?episodeId=${encodeURIComponent(activeEpisode.id)}&t=${Date.now()}`,
+              { cache: 'no-store' }
+            );
+            if (wavRes.ok) {
+              const arrayBuf = await wavRes.arrayBuffer();
+              audioBufferCacheRef.current[cacheKey] = await ctx.decodeAudioData(arrayBuf);
+            }
+          } catch {
+            // Fall through to client synthesis below
+          }
+        }
+        if (!audioBufferCacheRef.current[cacheKey]) {
+          const pcm =
+            isEpisodeMode && activeEpisode
+              ? synthesizeEpisodeAudioPcm(activeEpisode, ctx.sampleRate)
+              : isV2Mode
+                ? synthesizeIntelV2TrackPcm(ctx.sampleRate, INTEL_V2_SPEC.durationSec)
+                : isV1IntelMode
+                  ? synthesizeIntelTrackPcm(ctx.sampleRate, INTEL_VIDEO_SPEC.durationSec)
+                  : synthesizeTrackPcm(ctx.sampleRate, VIDEO_SPEC.durationSec);
+          const buf = ctx.createBuffer(2, pcm.left.length, ctx.sampleRate);
+          buf.getChannelData(0).set(pcm.left);
+          buf.getChannelData(1).set(pcm.right);
+          audioBufferCacheRef.current[cacheKey] = buf;
+        }
       }
       return { ctx, buf: audioBufferCacheRef.current[cacheKey] };
     } catch {
@@ -374,139 +468,118 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       {/* Left / Center Stage */}
       <section className="lg:col-span-7 bg-white border border-neutral-200 rounded-xl p-6 flex flex-col items-center">
-        {/* Mode Switcher + Video Spec Metadata */}
+        {/* Unified Episode & Archive Tab Switcher (No dropdown, no refresh button) */}
         <div className="w-full space-y-3 pb-4 border-b border-neutral-200">
-          <div className="w-full flex flex-wrap items-center justify-between gap-4">
+          <div className="w-full flex flex-wrap items-center justify-between gap-3">
             <div
               className="flex flex-wrap items-center gap-1 p-1 bg-neutral-100 rounded-lg"
-              role="group"
-              aria-label="选择视频作品"
+              role="tablist"
+              aria-label="选择视频剧集"
             >
-              <button
-                type="button"
-                onClick={() => {
-                  setIsPlaying(false);
-                  onProjectModeChange('episode');
-                }}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  projectMode === 'episode'
-                    ? 'bg-white text-neutral-900 shadow-sm'
-                    : 'text-neutral-600 hover:text-neutral-900'
-                }`}
-              >
-                每日剧集
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsPlaying(false);
-                  onProjectModeChange('1120_v2');
-                }}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  projectMode === '1120_v2'
-                    ? 'bg-white text-neutral-900 shadow-sm'
-                    : 'text-neutral-600 hover:text-neutral-900'
-                }`}
-              >
-                11.20 v2 精修爆款
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsPlaying(false);
-                  onProjectModeChange('1120_intel');
-                }}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  projectMode === '1120_intel'
-                    ? 'bg-white text-neutral-900 shadow-sm'
-                    : 'text-neutral-600 hover:text-neutral-900'
-                }`}
-              >
-                11.20 v1 存档
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsPlaying(false);
-                  onProjectModeChange('1117_close');
-                }}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  projectMode === '1117_close'
-                    ? 'bg-white text-neutral-900 shadow-sm'
-                    : 'text-neutral-600 hover:text-neutral-900'
-                }`}
-              >
-                1117收盘复刻
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsPlaying(false);
-                  onProjectModeChange('morning_brief');
-                }}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  projectMode === 'morning_brief'
-                    ? 'bg-white text-neutral-900 shadow-sm'
-                    : 'text-neutral-600 hover:text-neutral-900'
-                }`}
-              >
-                1119早报
-              </button>
+              {unifiedTabs.map((tab) => {
+                const isSelected = activeUnifiedTab
+                  ? tab.key === activeUnifiedTab.key
+                  : tab.projectMode === projectMode &&
+                    (tab.projectMode !== 'episode' || tab.episodeId === selectedEpisodeId);
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={isSelected}
+                    onClick={() => {
+                      setIsPlaying(false);
+                      if (onSelectUnifiedTab) {
+                        onSelectUnifiedTab(tab);
+                      } else if (tab.projectMode === 'episode' && tab.episodeId) {
+                        onSelectEpisode?.(tab.episodeId);
+                      } else {
+                        onProjectModeChange(tab.projectMode);
+                      }
+                    }}
+                    className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      isSelected
+                        ? 'bg-white text-neutral-900 shadow-sm'
+                        : 'text-neutral-600 hover:text-neutral-900'
+                    }`}
+                  >
+                    {tab.shortLabel}
+                  </button>
+                );
+              })}
             </div>
 
-            <div className="flex items-center gap-2 text-xs text-neutral-500 font-mono-num">
+            <div className="flex items-center gap-2.5 text-xs text-neutral-500 font-mono-num">
               <span>
                 {spec.width} × {spec.height}
               </span>
               <span aria-hidden="true">·</span>
               <span>{spec.fps} fps</span>
               <span aria-hidden="true">·</span>
-              <span>{totalFrames} 帧</span>
-              <span aria-hidden="true">·</span>
-              <span>{bpm} BPM</span>
+              <span>{durationSec.toFixed(1)}s</span>
+              {onOpenQrPreview && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPlaying(false);
+                    onOpenQrPreview();
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-neutral-900 hover:bg-neutral-800 text-white text-xs font-sans font-semibold whitespace-nowrap shrink-0 transition-colors"
+                >
+                  <QrCode className="w-3.5 h-3.5 text-amber-300" />
+                  <span>本集扫码预览</span>
+                </button>
+              )}
             </div>
           </div>
 
-          {projectMode === 'episode' && (
-            <div className="w-full flex flex-wrap items-center gap-2 pt-1">
-              <label htmlFor="episode-selector" className="text-xs font-medium text-neutral-500 shrink-0">
-                当前剧集
-              </label>
-              <select
-                id="episode-selector"
-                aria-label="选择每日剧集"
-                value={selectedEpisodeId}
-                disabled={episodesLoading || episodes.length === 0}
-                onChange={(e) => {
-                  setIsPlaying(false);
-                  onSelectEpisode?.(e.target.value);
-                }}
-                className="flex-1 min-w-[200px] px-2.5 py-1.5 text-xs font-medium text-neutral-900 bg-neutral-50 border border-neutral-200 rounded-lg focus:outline-none focus:border-[#C8342A]"
-              >
-                {episodes.length === 0 ? (
-                  <option value="">
-                    {episodesLoading ? '正在加载剧集列表...' : '暂无可用剧集（可切回旧版）'}
-                  </option>
-                ) : (
-                  episodes.map((ep) => (
-                    <option key={ep.id} value={ep.id}>
-                      {ep.date} · {ep.title} ({ep.durationSec.toFixed(1)}s)
-                    </option>
-                  ))
-                )}
-              </select>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsPlaying(false);
-                  onRefreshEpisodes?.();
-                }}
-                disabled={episodesLoading}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 text-xs font-medium whitespace-nowrap shrink-0"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${episodesLoading ? 'animate-spin' : ''}`} />
-                <span>刷新列表</span>
-              </button>
+          {isEpisodeMode && hasNarrationScripts && (
+            <div className="w-full flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-neutral-100">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-neutral-700">
+                  <Mic className="w-3.5 h-3.5 text-[#C8342A]" />
+                  <span>AI 主播配音</span>
+                </span>
+                <select
+                  aria-label="选择AI主播音色"
+                  value={voiceName}
+                  disabled={isGeneratingVoice}
+                  onChange={(e) => setVoiceName(e.target.value as 'Charon' | 'Kore')}
+                  className="px-2 py-1 text-xs text-neutral-800 bg-neutral-50 border border-neutral-200 rounded-md"
+                >
+                  <option value="Charon">沉稳男声主播 (Charon)</option>
+                  <option value="Kore">干练女声主播 (Kore)</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={handleGenerateVoiceover}
+                  disabled={isGeneratingVoice}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-neutral-900 hover:bg-neutral-800 disabled:opacity-60 text-white text-xs font-medium whitespace-nowrap shrink-0"
+                >
+                  <span>
+                    {isGeneratingVoice
+                      ? '合成中...'
+                      : activeEpisodeMeta?.hasVoiceover
+                        ? '重新合成配音'
+                        : '一键合成 AI 配音'}
+                  </span>
+                </button>
+              </div>
+              <div className="text-[11px] text-neutral-500">
+                {activeEpisodeMeta?.hasVoiceover
+                  ? '已就绪 · 播放与导出自动混流闪避'
+                  : '支持 Gemini TTS 分镜口播对齐'}
+              </div>
+              {voiceMessage && (
+                <div className="w-full text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-2.5 py-1">
+                  {voiceMessage}
+                </div>
+              )}
+              {voiceError && (
+                <div className="w-full text-[11px] text-[#C8342A] bg-red-50 border border-red-200 rounded-md px-2.5 py-1">
+                  {voiceError}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -519,7 +592,7 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
                 ? 'bg-neutral-100 border-neutral-300'
                 : 'bg-neutral-950 border-neutral-800'
             }`}
-            style={{ width: isPortrait916 ? 'min(100%, 300px)' : 'min(100%, 256px)' }}
+            style={{ width: isPortrait916 ? 'min(100%, 340px)' : 'min(100%, 280px)' }}
           >
             <div
               className={`relative w-full overflow-hidden rounded-[18px] ${
@@ -636,29 +709,48 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
               </button>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setIsMuted((m) => !m)}
-              aria-label={isMuted ? '取消静音' : '静音'}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-50 text-xs font-medium whitespace-nowrap shrink-0"
-            >
-              {isMuted ? (
-                <VolumeX className="w-4 h-4 text-neutral-400" />
-              ) : (
-                <Volume2 className="w-4 h-4 text-[#C8342A]" />
+            <div className="flex items-center gap-2">
+              {isPortrait916 && (
+                <button
+                  type="button"
+                  onClick={() => setShowSafeZone((s) => !s)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
+                    showSafeZone
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                      : 'border-neutral-200 text-neutral-700 hover:bg-neutral-50'
+                  }`}
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>{showSafeZone ? '隐藏安全区' : '安全区参考'}</span>
+                </button>
               )}
-              <span>
-                {isMuted
-                  ? '已静音'
-                  : isEpisodeMode
-                    ? `${bpm} BPM 动态音效`
-                    : isV2Mode
-                      ? '112 BPM 动感音效'
-                      : isV1IntelMode
-                        ? '108 BPM 动感剪辑'
-                        : '129.2 BPM 音轨'}
-              </span>
-            </button>
+
+              <button
+                type="button"
+                onClick={() => setIsMuted((m) => !m)}
+                aria-label={isMuted ? '取消静音' : '静音'}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-50 text-xs font-medium whitespace-nowrap shrink-0"
+              >
+                {isMuted ? (
+                  <VolumeX className="w-4 h-4 text-neutral-400" />
+                ) : (
+                  <Volume2 className="w-4 h-4 text-[#C8342A]" />
+                )}
+                <span>
+                  {isMuted
+                    ? '已静音'
+                    : isEpisodeMode
+                      ? activeEpisodeMeta?.hasVoiceover
+                        ? `${bpm} BPM + AI配音`
+                        : `${bpm} BPM 动态音效`
+                      : isV2Mode
+                        ? '112 BPM 动感音效'
+                        : isV1IntelMode
+                          ? '108 BPM 动感剪辑'
+                          : '129.2 BPM 音轨'}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -700,6 +792,14 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
                     {activeCompiledShot.focusGoal}
                   </span>
                 </div>
+                {activeCompiledShot.scene.narration && (
+                  <div className="pt-2 border-t border-neutral-100">
+                    <div className="text-xs text-neutral-500 mb-1">本幕主播口播词</div>
+                    <p className="text-xs text-neutral-800 bg-neutral-50 border border-neutral-200 rounded-lg px-3 py-2 leading-relaxed">
+                      “{activeCompiledShot.scene.narration}”
+                    </p>
+                  </div>
+                )}
               </div>
             </section>
 
@@ -788,7 +888,7 @@ export const VideoPlayerWorkspace: React.FC<VideoPlayerWorkspaceProps> = ({
               {episodesLoading ? '正在加载每日剧集...' : '尚未加载动态剧集'}
             </h2>
             <p className="text-xs text-neutral-500">
-              请点击「刷新列表」重新读取 episodes/*/episode.json，或切换顶部旧版模板预览。
+              请在上方 Tab 栏切换其它剧集或旧版存档版本进行预览。
             </p>
           </section>
         ) : isV2Mode && activeV2Shot ? (

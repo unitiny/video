@@ -3,7 +3,11 @@ import { encodeStereoWav, synthesizeTrackPcm, type StereoPcm } from '../audio/sy
 import { synthesizeIntelTrackPcm } from '../intel/synthIntelAudio';
 import { synthesizeIntelV2TrackPcm } from '../intelV2/synthIntelV2Audio';
 import type { EpisodeManifest } from '../engine/schema';
-import { synthesizeEpisodeAudioPcm } from '../engine/audioSynth';
+import {
+  decodeWavToMonoFloat32,
+  mixVoiceoverIntoStereoPcm,
+  synthesizeEpisodeAudioPcm,
+} from '../engine/audioSynth';
 
 export type ExportTrackKey = '1120_v2' | '1120' | '1117';
 
@@ -80,6 +84,12 @@ export interface ClientMp4ExportParams {
   renderFrame: (frameIndex: number, outCanvas: HTMLCanvasElement, outCtx: CanvasRenderingContext2D) => void;
   onProgress: (renderedFrames: number) => void;
   onPhaseChange?: (phaseLabel: string) => void;
+  /** Skip client-side audio encoding when server will instant stream-copy mux cached WAV in ~0.2s */
+  skipAudio?: boolean;
+  /** Fast real-time GPU encoding profile for sub-5s mobile QR preview (default false = high master bitrate) */
+  fastMode?: boolean;
+  /** Optional static WAV URL for episode AI voiceover to mix directly on client (avoids server FFmpeg) */
+  voiceoverUrl?: string;
 }
 
 export interface ClientMp4ExportResult {
@@ -87,44 +97,87 @@ export interface ClientMp4ExportResult {
   sizeBytes: number;
   filename: string;
   engineLabel: string;
+  hasAudio?: boolean;
+}
+
+const clientPcmCache = new Map<string, StereoPcm>();
+
+function yieldFast(): Promise<void> {
+  if (typeof MessageChannel !== 'undefined') {
+    return new Promise((resolve) => {
+      const ch = new MessageChannel();
+      ch.port1.onmessage = () => resolve();
+      ch.port2.postMessage(null);
+    });
+  }
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+export async function isFastWebCodecsSupported(
+  width: number,
+  height: number,
+  fps: number
+): Promise<boolean> {
+  const cfg = await pickSupportedVideoConfig(width, height, fps, true);
+  return Boolean(cfg);
 }
 
 async function pickSupportedVideoConfig(
   width: number,
   height: number,
-  fps: number
+  fps: number,
+  fastMode = false
 ): Promise<VideoEncoderConfig | null> {
   if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
     return null;
   }
-  const bitrate = width >= 1000 ? 6_500_000 : 2_600_000;
+  // Crisp 1.05 Mbps for 1080×1920 fast mobile stream (~5MB for 40s: uploads in ~2-3s, streams on phone with ZERO buffering!);
+  // 6.5 Mbps for archival master export.
+  const bitrate = fastMode
+    ? width >= 1000
+      ? 1_050_000
+      : 750_000
+    : width >= 1000
+      ? 6_500_000
+      : 2_600_000;
   const codecs = [
-    'avc1.64002a',
-    'avc1.4d002a',
+    'avc1.4d002a', // Main Level 4.2 (100% iOS/Android/Douyin hardware decode)
+    'avc1.64002a', // High Level 4.2
     'avc1.4d001f',
     'avc1.42001f',
     'avc1.42E01E',
   ];
-  for (const codec of codecs) {
-    try {
-      const support = await VideoEncoder.isConfigSupported({
-        codec,
-        width,
-        height,
-        bitrate,
-        framerate: fps,
-      });
-      if (support.supported && support.config) {
-        return support.config;
+
+  // Try prefer-hardware first for maximum 300-600fps GPU encode speed
+  const accelModes: Array<'prefer-hardware' | 'no-preference'> = [
+    'prefer-hardware',
+    'no-preference',
+  ];
+  for (const hardwareAcceleration of accelModes) {
+    for (const codec of codecs) {
+      try {
+        const cfg: VideoEncoderConfig = {
+          codec,
+          width,
+          height,
+          bitrate,
+          framerate: fps,
+          hardwareAcceleration,
+          ...(fastMode ? { latencyMode: 'realtime' as const } : {}),
+        };
+        const support = await VideoEncoder.isConfigSupported(cfg);
+        if (support.supported && support.config) {
+          return support.config;
+        }
+      } catch {
+        // Try next H.264 profile
       }
-    } catch {
-      // Try next H.264 profile
     }
   }
   return null;
 }
 
-async function pickSupportedAudioConfig(): Promise<{
+async function pickSupportedAudioConfig(requireAacOnly = false): Promise<{
   muxerCodec: 'aac' | 'opus';
   encoderConfig: AudioEncoderConfig;
 } | null> {
@@ -138,18 +191,22 @@ async function pickSupportedAudioConfig(): Promise<{
         codec: 'mp4a.40.2',
         numberOfChannels: 2,
         sampleRate: 44100,
-        bitrate: 192_000,
+        bitrate: requireAacOnly ? 96_000 : 160_000,
       },
     },
-    {
-      muxerCodec: 'opus',
-      config: {
-        codec: 'opus',
-        numberOfChannels: 2,
-        sampleRate: 48000,
-        bitrate: 160_000,
-      },
-    },
+    ...(requireAacOnly
+      ? []
+      : [
+          {
+            muxerCodec: 'opus' as const,
+            config: {
+              codec: 'opus',
+              numberOfChannels: 2,
+              sampleRate: 48000,
+              bitrate: 160_000,
+            },
+          },
+        ]),
   ];
   for (const c of candidates) {
     try {
@@ -262,25 +319,41 @@ async function exportWithMediaRecorderFallback(
     sizeBytes: blob.size,
     filename: getExportFileName(trackKey, ext, episode?.id),
     engineLabel: `浏览器实时编码 (${ext.toUpperCase()})`,
+    hasAudio: Boolean(audioSrc),
   };
 }
 
 export async function exportClientMp4(
   params: ClientMp4ExportParams
 ): Promise<ClientMp4ExportResult> {
-  const { totalFrames, fps, width, height, trackKey, episode, renderFrame, onProgress, onPhaseChange } =
-    params;
+  const {
+    totalFrames,
+    fps,
+    width,
+    height,
+    trackKey,
+    episode,
+    renderFrame,
+    onProgress,
+    onPhaseChange,
+    skipAudio = false,
+    fastMode = false,
+    voiceoverUrl,
+  } = params;
 
-  const videoConfig = await pickSupportedVideoConfig(width, height, fps);
+  const videoConfig = await pickSupportedVideoConfig(width, height, fps, fastMode);
   if (!videoConfig) {
+    if (skipAudio) {
+      throw new Error('WEBCODECS_UNAVAILABLE');
+    }
     return exportWithMediaRecorderFallback(params);
   }
 
-  const audioChoice = await pickSupportedAudioConfig();
+  const audioChoice = skipAudio ? null : await pickSupportedAudioConfig(fastMode);
   onPhaseChange?.(
     audioChoice
-      ? `正在通过浏览器 WebCodecs 合成 H.264 + ${audioChoice.muxerCodec.toUpperCase()} MP4...`
-      : '正在通过浏览器 WebCodecs 合成 H.264 MP4...'
+      ? `GPU 硬件极速编码 1080P (H.264 + ${audioChoice.muxerCodec.toUpperCase()})...`
+      : 'GPU 硬件极速编码 1080P H.264 视频流...'
   );
 
   const target = new ArrayBufferTarget();
@@ -328,13 +401,17 @@ export async function exportClientMp4(
     audioEncoder.configure(audioChoice.encoderConfig);
   }
 
+  // IMPORTANT: Do NOT set `willReadFrequently: true` — keep Canvas2D on GPU for zero-copy VideoFrame textures!
   const outCanvas = document.createElement('canvas');
   outCanvas.width = width;
   outCanvas.height = height;
-  const outCtx = outCanvas.getContext('2d', { willReadFrequently: true });
+  const outCtx = outCanvas.getContext('2d', { alpha: false });
   if (!outCtx) throw new Error('输出画布上下文不可用');
 
   const frameDurationUs = Math.round(1_000_000 / fps);
+  const keyFrameInterval = fastMode ? Math.max(15, Math.round(fps)) : 60;
+  let lastYieldMs = performance.now();
+
   for (let f = 0; f < totalFrames; f++) {
     if (encodeError) throw encodeError;
 
@@ -343,28 +420,59 @@ export async function exportClientMp4(
       timestamp: Math.round((f * 1_000_000) / fps),
       duration: frameDurationUs,
     });
-    videoEncoder.encode(vf, { keyFrame: f % 60 === 0 });
+    videoEncoder.encode(vf, { keyFrame: f % keyFrameInterval === 0 });
     vf.close();
 
-    // Flush every 180 frames so in-flight queue memory stays bounded without per-frame polling stalls,
-    // and progress % tracks actual H.264 encoding speed smoothly from 0% to 100%.
-    if ((f + 1) % 180 === 0 && f < totalFrames - 1) {
-      await videoEncoder.flush();
+    // Non-stalling GPU queue backpressure instead of blocking videoEncoder.flush()!
+    if (videoEncoder.encodeQueueSize > 16) {
+      await yieldFast();
+      while (videoEncoder.encodeQueueSize > 24 && !encodeError) {
+        await yieldFast();
+      }
     }
 
-    if ((f + 1) % 10 === 0 || f === totalFrames - 1) {
+    const now = performance.now();
+    if (now - lastYieldMs >= 45 || f === totalFrames - 1) {
+      lastYieldMs = now;
       onProgress(f + 1);
-      await new Promise((r) => setTimeout(r, 0));
+      await yieldFast();
     }
   }
 
-  // Feed audio track in 2048-sample planar blocks
+  // Feed audio track in 4096-sample planar blocks (cached in RAM for instant repeat runs)
   if (audioEncoder && audioChoice) {
     onPhaseChange?.('正在混流立体声音轨并封装 MP4...');
     const sampleRate = audioChoice.encoderConfig.sampleRate;
-    const pcm = synthesizeTrackForRate(trackKey, sampleRate, episode);
+    const pcmKey = `${episode?.id || trackKey}:${sampleRate}:${voiceoverUrl || ''}`;
+    let pcm = clientPcmCache.get(pcmKey);
+    if (!pcm) {
+      pcm = synthesizeTrackForRate(trackKey, sampleRate, episode);
+      if (voiceoverUrl) {
+        try {
+          const voRes = await fetch(voiceoverUrl);
+          if (voRes.ok) {
+            const voBytes = new Uint8Array(await voRes.arrayBuffer());
+            const decoded = decodeWavToMonoFloat32(voBytes);
+            pcm = mixVoiceoverIntoStereoPcm(
+              pcm,
+              decoded.samples,
+              decoded.sampleRate,
+              episode?.audio?.duckingDb ?? -13
+            );
+          }
+        } catch {
+          // Proceed with BGM if voiceover WAV fetch fails
+        }
+      }
+      if (clientPcmCache.size > 4) {
+        const oldest = clientPcmCache.keys().next().value;
+        if (oldest) clientPcmCache.delete(oldest);
+      }
+      clientPcmCache.set(pcmKey, pcm);
+    }
+
     const totalSamples = Math.min(pcm.left.length, Math.round((totalFrames / fps) * sampleRate));
-    const chunkSamples = 2048;
+    const chunkSamples = 4096;
 
     for (let offset = 0; offset < totalSamples; offset += chunkSamples) {
       if (encodeError) throw encodeError;
@@ -402,7 +510,8 @@ export async function exportClientMp4(
     sizeBytes: blob.size,
     filename: getExportFileName(trackKey, 'mp4', episode?.id),
     engineLabel: audioChoice
-      ? `浏览器 WebCodecs (H.264 + ${audioChoice.muxerCodec.toUpperCase()})`
-      : '浏览器 WebCodecs (H.264)',
+      ? `GPU WebCodecs (H.264 + ${audioChoice.muxerCodec.toUpperCase()})`
+      : 'GPU WebCodecs (H.264)',
+    hasAudio: Boolean(audioChoice),
   };
 }

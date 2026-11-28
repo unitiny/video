@@ -196,6 +196,7 @@ export function collectEpisodeAssetSources(episode: EpisodeManifest): {
   for (const scene of episode.scenes) {
     if (scene.kind === 'hook_live_video') {
       if (scene.data.posterSrc) imageSet.add(scene.data.posterSrc);
+      if (scene.data.memeCard?.imageSrc) imageSet.add(scene.data.memeCard.imageSrc);
       if (scene.data.videoSrc) {
         hookVideos.push({
           videoSrc: scene.data.videoSrc,
@@ -207,7 +208,8 @@ export function collectEpisodeAssetSources(episode: EpisodeManifest): {
       scene.kind === 'event_flow_funnel' ||
       scene.kind === 'event_dual_spotlight' ||
       scene.kind === 'event_timeline' ||
-      scene.kind === 'animated_poster_stage'
+      scene.kind === 'animated_poster_stage' ||
+      scene.kind === 'v3_editorial_story'
     ) {
       if (scene.data.imageSrc) {
         imageSet.add(scene.data.imageSrc);

@@ -11,10 +11,16 @@ import { renderEventFlowFunnelScene } from './EventFlowFunnelScene';
 import { renderEventTimelineScene } from './EventTimelineScene';
 import { renderHookLiveVideoScene } from './HookLiveVideoScene';
 import { renderMarketChronoBoardScene } from './MarketChronoBoardScene';
+import { renderV3AShareAnchorScene } from './V3AShareAnchorScene';
+import { renderV3ActionCheatsheetScene } from './V3ActionCheatsheetScene';
+import { renderV3ConflictHookScene } from './V3ConflictHookScene';
+import { renderV3EditorialStoryScene } from './V3EditorialStoryScene';
+import { renderV3MarketPulseScene } from './V3MarketPulseScene';
 import { renderVerdictScenarioScene } from './VerdictScenarioScene';
 import type { SceneRenderContext } from './primitives';
 
 export * from './primitives';
+export * from './v3BrandChrome';
 export { renderAnimatedPosterStageScene } from './AnimatedPosterStageScene';
 export { renderHookLiveVideoScene } from './HookLiveVideoScene';
 export { renderMarketChronoBoardScene } from './MarketChronoBoardScene';
@@ -22,6 +28,11 @@ export { renderEventFlowFunnelScene } from './EventFlowFunnelScene';
 export { renderEventDualSpotlightScene } from './EventDualSpotlightScene';
 export { renderEventTimelineScene } from './EventTimelineScene';
 export { renderVerdictScenarioScene } from './VerdictScenarioScene';
+export { renderV3ConflictHookScene } from './V3ConflictHookScene';
+export { renderV3MarketPulseScene } from './V3MarketPulseScene';
+export { renderV3AShareAnchorScene } from './V3AShareAnchorScene';
+export { renderV3EditorialStoryScene } from './V3EditorialStoryScene';
+export { renderV3ActionCheatsheetScene } from './V3ActionCheatsheetScene';
 
 interface CachedTimelineEntry {
   signature: string;
@@ -99,6 +110,21 @@ export function renderEpisodeFrame(
       break;
     case 'animated_poster_stage':
       renderAnimatedPosterStageScene(rc, scene.data);
+      break;
+    case 'v3_conflict_hook':
+      renderV3ConflictHookScene(rc, scene.data);
+      break;
+    case 'v3_market_pulse':
+      renderV3MarketPulseScene(rc, scene.data);
+      break;
+    case 'v3_ashare_anchor':
+      renderV3AShareAnchorScene(rc, scene.data);
+      break;
+    case 'v3_editorial_story':
+      renderV3EditorialStoryScene(rc, scene.data);
+      break;
+    case 'v3_action_cheatsheet':
+      renderV3ActionCheatsheetScene(rc, scene.data);
       break;
   }
 }

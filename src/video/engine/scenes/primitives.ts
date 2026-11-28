@@ -303,13 +303,13 @@ export function drawMiniDailyCandles(
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.font = `800 ${heroMode ? 22 : 16}px ${FONT}`;
+  ctx.font = `800 ${heroMode ? 26 : 20}px ${FONT}`;
   ctx.fillStyle = light ? (heroMode ? '#92400E' : '#475569') : accentLabel;
   ctx.fillText('日K', x + 10, y + 6);
 
   ctx.textAlign = 'right';
-  ctx.font = `700 ${heroMode ? 17 : 13}px ${FONT}`;
-  ctx.fillStyle = light ? '#B45309' : 'rgba(251, 191, 36, 0.86)';
+  ctx.font = `700 ${heroMode ? 21 : 17}px ${FONT}`;
+  ctx.fillStyle = light ? '#B45309' : 'rgba(251, 191, 36, 0.88)';
   ctx.fillText('今日', x + w - 9, y + 7);
 
   if (candles.length === 0) {
@@ -329,7 +329,7 @@ export function drawMiniDailyCandles(
 
   const plotX = x + 10;
   const plotW = w - 20;
-  const plotTop = y + (heroMode ? 38 : 28);
+  const plotTop = y + (heroMode ? 42 : 33);
   const plotBot = y + h - 10;
   const mapY = (v: number) =>
     lerp(plotBot, plotTop, clamp((v - padMin) / (padMax - padMin), 0, 1));
@@ -401,6 +401,131 @@ export function drawMiniDailyCandles(
 }
 
 /**
+ * Large Hero Percentage Tile (replaces left mini 日K box):
+ * - Centered oversized % change figure (`红涨绿跌`, gold accent preserved for A50 Hero)
+ * - Subtle animated triple-chevron wayfinding arrow backdrop (3 stacked arrowheads only:
+ *   red upward for gains, green downward for losses — calm low-contrast backing behind digits)
+ */
+export function drawChangePctHeroBox(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  changePct: number,
+  displayText: string,
+  localF: number,
+  enterFrame: number,
+  numColor: string,
+  accentLabel = '#94A3B8',
+  heroMode = false,
+  light = false
+): void {
+  const isPos = changePct >= 0;
+  // Wayfinding chevron direction & color: Red upward for gains, Green downward for losses
+  const dir = isPos ? -1 : 1; // -1 = up, +1 = down
+  const chevRgb = isPos ? '239, 68, 68' : '16, 185, 129';
+
+  ctx.save();
+  ctx.fillStyle = light
+    ? heroMode
+      ? 'rgba(255, 255, 255, 0.88)'
+      : '#F8FAFC'
+    : 'rgba(7, 11, 18, 0.84)';
+  roundRect(ctx, x, y, w, h, 10);
+  ctx.fill();
+
+  ctx.strokeStyle = light
+    ? heroMode
+      ? 'rgba(217, 119, 6, 0.36)'
+      : '#E2E8F0'
+    : heroMode
+      ? 'rgba(251, 191, 36, 0.25)'
+      : 'rgba(255, 255, 255, 0.08)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Clip animated 3-chevron backdrop cleanly inside the tile
+  ctx.save();
+  roundRect(ctx, x + 1, y + 1, Math.max(1, w - 2), Math.max(1, h - 2), 9);
+  ctx.clip();
+
+  // Subtle tinted ambient wash aligned with direction
+  const tintGrad = ctx.createLinearGradient(0, isPos ? y + h : y, 0, isPos ? y : y + h);
+  tintGrad.addColorStop(0, `rgba(${chevRgb}, 0.01)`);
+  tintGrad.addColorStop(1, `rgba(${chevRgb}, ${light ? 0.08 : 0.09})`);
+  ctx.fillStyle = tintGrad;
+  ctx.fillRect(x, y, w, h);
+
+  // Triple stacked chevron arrowheads ("只要箭头顶端那3个箭头向上延伸的效果", NO stem)
+  const cx = x + w / 2;
+  const cy = y + h * (heroMode ? 0.56 : 0.57);
+  const halfW = Math.min(w * 0.31, heroMode ? 96 : 58);
+  const tipH = Math.round(h * (heroMode ? 0.145 : 0.175));
+  const stepGap = Math.round(h * (heroMode ? 0.21 : 0.22));
+  const animClock = Math.max(0, localF - enterFrame) * 0.13;
+  // Gentle synchronized forward nudge in trend direction
+  const drift = dir * ((Math.sin(animClock) * 0.5 + 0.5) * (heroMode ? 9 : 5));
+
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = heroMode ? 7.5 : 5;
+
+  // Order slots 0 -> 1 -> 2 from tail to tip along travel direction (`dir`)
+  for (let slot = 0; slot < 3; slot++) {
+    const slotOffsetFromCenter = (1 - slot) * (-dir * stepGap);
+    const arrowY = cy + slotOffsetFromCenter + drift;
+    // Sequential directional pulse wave (tail -> middle -> tip) like road guide chevrons
+    const wave = Math.pow(0.5 + 0.5 * Math.sin(animClock - slot * 1.25), 1.45);
+    const baseAlpha = light ? 0.07 : 0.08;
+    const pulseAlpha = light ? 0.11 : 0.135;
+    const tierBoost = slot === 2 ? 1.12 : slot === 1 ? 1.0 : 0.88;
+    const alpha = clamp((baseAlpha + pulseAlpha * wave) * tierBoost, 0.05, 0.24);
+
+    ctx.strokeStyle = `rgba(${chevRgb}, ${alpha.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.moveTo(cx - halfW, arrowY - dir * (tipH * 0.5));
+    ctx.lineTo(cx, arrowY + dir * (tipH * 0.5));
+    ctx.lineTo(cx + halfW, arrowY - dir * (tipH * 0.5));
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Top-left subtle label symmetrical with right box (`分时`)
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = `800 ${heroMode ? 26 : 19}px ${FONT}`;
+  ctx.fillStyle = light ? (heroMode ? '#92400E' : '#475569') : accentLabel;
+  ctx.fillText('涨跌幅', x + 10, y + 6);
+
+  // Giant bold percentage readout centered cleanly over the subtle chevrons
+  const charCount = displayText.length;
+  const baseFontSize = heroMode
+    ? charCount >= 7
+      ? 80
+      : 92
+    : charCount >= 7
+      ? 45
+      : 54;
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `900 ${baseFontSize}px ${MONO}`;
+
+  if (!light) {
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.82)';
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetY = 3;
+  }
+  ctx.fillStyle = numColor;
+  ctx.fillText(displayText, x + w / 2, y + h * 0.58, w - 16);
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  ctx.restore();
+}
+
+/**
  * Full-Day Intraday Time-Sharing Chart (`分时`):
  * - 48-point session curve + cumulative yellow intraday average line (均价线)
  * - Dashed 0% open baseline + subtle session markers (开盘 / 盘中 / 收盘)
@@ -419,7 +544,8 @@ export function drawMiniIntradayChart(
   loopPhase: number,
   accentLabel = '#94A3B8',
   heroMode = false,
-  light = false
+  light = false,
+  extremeLowTag?: string
 ): void {
   ctx.save();
   ctx.fillStyle = light
@@ -441,13 +567,13 @@ export function drawMiniIntradayChart(
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.font = `800 ${heroMode ? 22 : 16}px ${FONT}`;
+  ctx.font = `800 ${heroMode ? 26 : 20}px ${FONT}`;
   ctx.fillStyle = light ? (heroMode ? '#92400E' : '#475569') : accentLabel;
   ctx.fillText('分时', x + 10, y + 6);
 
   ctx.textAlign = 'right';
-  ctx.font = `700 ${heroMode ? 17 : 13}px ${FONT}`;
-  ctx.fillStyle = light ? '#64748B' : 'rgba(148, 163, 184, 0.84)';
+  ctx.font = `700 ${heroMode ? 21 : 17}px ${FONT}`;
+  ctx.fillStyle = light ? '#64748B' : 'rgba(148, 163, 184, 0.9)';
   ctx.fillText(heroMode ? '全天分时走势' : '全天分时', x + w - 9, y + 7);
 
   if (points.length < 2) {
@@ -467,9 +593,9 @@ export function drawMiniIntradayChart(
 
   const plotX = x + 10;
   const plotW = w - 20;
-  const plotTop = y + (heroMode ? 38 : 28);
-  const axisLabelH = heroMode ? 22 : 17;
-  const volHeight = Math.max(14, Math.round(h * 0.17));
+  const plotTop = y + (heroMode ? 42 : 33);
+  const axisLabelH = heroMode ? 26 : 21;
+  const volHeight = Math.max(14, Math.round(h * 0.16));
   const plotBot = y + h - volHeight - axisLabelH - 6;
   const mapX = (idxFloat: number) => plotX + (idxFloat / (points.length - 1)) * plotW;
   const mapY = (v: number) =>
@@ -496,15 +622,15 @@ export function drawMiniIntradayChart(
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
-  ctx.font = `700 ${heroMode ? 15 : 12}px ${MONO}`;
-  ctx.fillStyle = light ? '#64748B' : 'rgba(148, 163, 184, 0.72)';
+  ctx.font = `700 ${heroMode ? 18 : 15}px ${MONO}`;
+  ctx.fillStyle = light ? '#64748B' : 'rgba(148, 163, 184, 0.8)';
   ctx.fillText('0%', plotX + 2, zeroY - 2);
 
   // Bottom session time ticks
-  const tickY = y + h - 3;
+  const tickY = y + h - 2;
   ctx.textBaseline = 'bottom';
-  ctx.font = `700 ${heroMode ? 16 : 13}px ${FONT}`;
-  ctx.fillStyle = light ? '#64748B' : 'rgba(148, 163, 184, 0.72)';
+  ctx.font = `700 ${heroMode ? 20 : 17}px ${FONT}`;
+  ctx.fillStyle = light ? '#64748B' : 'rgba(203, 213, 225, 0.86)';
   ctx.textAlign = 'left';
   ctx.fillText('开盘', plotX, tickY);
   ctx.textAlign = 'center';
@@ -616,6 +742,56 @@ export function drawMiniIntradayChart(
     ctx.beginPath();
     ctx.arc(dotX, dotY, heroMode ? 4 : 3, 0, Math.PI * 2);
     ctx.fill();
+
+    // Optional Intraday Extreme Low Callout Pin (e.g. "盘中低 -4.33%")
+    if (extremeLowTag && !light) {
+      let minIdx = 0;
+      let minVal = points[0];
+      for (let i = 1; i < points.length; i++) {
+        if (points[i] < minVal) {
+          minVal = points[i];
+          minIdx = i;
+        }
+      }
+      if (maxFloatIdx >= minIdx) {
+        const pinReveal = clamp((maxFloatIdx - minIdx) / 6, 0, 1);
+        const exX = mapX(minIdx);
+        const exY = mapY(minVal);
+        ctx.save();
+        ctx.globalAlpha = pinReveal;
+
+        // Pulsing warning ring at intraday low
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.34)';
+        ctx.beginPath();
+        ctx.arc(exX, exY, 7.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#FDE047';
+        ctx.beginPath();
+        ctx.arc(exX, exY, 3.6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Compact non-overlapping callout pill
+        ctx.font = `800 ${heroMode ? 20 : 16}px ${MONO}, ${FONT}`;
+        const pillTextW = ctx.measureText(extremeLowTag).width;
+        const pillW = pillTextW + 16;
+        const pillH = heroMode ? 30 : 25;
+        const pillX = clamp(exX + 8, plotX + 2, plotX + plotW - pillW - 2);
+        const pillY = clamp(exY - pillH - 6, plotTop + 2, plotBot - pillH - 2);
+
+        ctx.fillStyle = 'rgba(12, 18, 32, 0.92)';
+        roundRect(ctx, pillX, pillY, pillW, pillH, 6);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.78)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#FDE047';
+        ctx.fillText(extremeLowTag, pillX + pillW / 2, pillY + pillH / 2 + 0.5);
+        ctx.restore();
+      }
+    }
   }
 
   ctx.restore();
@@ -627,6 +803,10 @@ export interface CleanIndexCardOptions {
   heroNoteStartFrame?: number;
   heroNoteEndFrame?: number;
   light?: boolean;
+  /** Refined obsidian glass surface + top specular rim */
+  polished?: boolean;
+  /** Visual guidance spotlight glow while this row is actively featured */
+  activeGlow?: boolean;
 }
 
 /**
@@ -647,10 +827,13 @@ export function drawCleanIndexCard(
   if (localF < enterFrame) return;
 
   const light = Boolean(options?.light);
+  const polished = Boolean(options?.polished);
+  const activeGlow = Boolean(options?.activeGlow);
   const p = getCardEnterProgress(localF, enterFrame, 16);
   const e = easeOutCubic(p);
   const heroShapeNote = options?.heroShapeNote;
   const isHero = Boolean(heroShapeNote);
+  const isCompact = !isHero && h <= 226;
   const isPos = item.changePct >= 0;
   const pctColor =
     options?.accentColorOverride ??
@@ -676,10 +859,24 @@ export function drawCleanIndexCard(
       ctx.fillStyle = '#FFFFFF';
     }
   } else if (isHero) {
+    if (polished && activeGlow) {
+      ctx.shadowColor = 'rgba(251, 191, 36, 0.28)';
+      ctx.shadowBlur = 28;
+    }
     const heroBg = ctx.createLinearGradient(x, y, x + w, y + h);
-    heroBg.addColorStop(0, 'rgba(251, 191, 36, 0.16)');
-    heroBg.addColorStop(1, 'rgba(251, 191, 36, 0.04)');
+    heroBg.addColorStop(0, polished ? 'rgba(251, 191, 36, 0.2)' : 'rgba(251, 191, 36, 0.16)');
+    heroBg.addColorStop(0.55, polished ? 'rgba(17, 24, 39, 0.94)' : 'rgba(251, 191, 36, 0.08)');
+    heroBg.addColorStop(1, polished ? 'rgba(6, 10, 18, 0.96)' : 'rgba(251, 191, 36, 0.04)');
     ctx.fillStyle = heroBg;
+  } else if (polished) {
+    if (activeGlow) {
+      ctx.shadowColor = `${pctColor}44`;
+      ctx.shadowBlur = 24;
+    }
+    const glassBg = ctx.createLinearGradient(x, y, x, y + h);
+    glassBg.addColorStop(0, activeGlow ? '#111A2E' : '#0B111E');
+    glassBg.addColorStop(1, '#050810');
+    ctx.fillStyle = glassBg;
   } else {
     ctx.fillStyle = 'rgba(255, 255, 255, 0.045)';
   }
@@ -695,52 +892,76 @@ export function drawCleanIndexCard(
         ? pctColor
         : '#CBD5E1'
     : isHero
-      ? 'rgba(251, 191, 36, 0.65)'
-      : p < 0.9
+      ? activeGlow
+        ? '#FACC15'
+        : 'rgba(251, 191, 36, 0.65)'
+      : activeGlow || p < 0.9
         ? pctColor
-        : 'rgba(255, 255, 255, 0.12)';
-  ctx.lineWidth = isHero ? 2.5 : p < 0.9 ? 2.2 : 1.3;
+        : polished
+          ? 'rgba(255, 255, 255, 0.14)'
+          : 'rgba(255, 255, 255, 0.12)';
+  ctx.lineWidth = isHero ? (activeGlow ? 3 : 2.5) : activeGlow || p < 0.9 ? 2.2 : 1.3;
   ctx.stroke();
+
+  // Top 1px specular sheen highlight in polished dark mode
+  if (polished && !light) {
+    const rimGrad = ctx.createLinearGradient(x + 18, y, x + w - 18, y);
+    rimGrad.addColorStop(0, 'rgba(255, 255, 255, 0)');
+    rimGrad.addColorStop(0.5, activeGlow ? 'rgba(255, 255, 255, 0.34)' : 'rgba(255, 255, 255, 0.16)');
+    rimGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = rimGrad;
+    ctx.fillRect(x + 18, y + 1, w - 36, 1.5);
+  }
 
   // Left accent bar
   ctx.fillStyle = pctColor;
-  roundRect(ctx, x, y + 16, isHero ? 8 : 6, h - 32, 4);
+  roundRect(ctx, x, y + 14, isHero ? 8 : 6, h - 28, 4);
   ctx.fill();
 
-  // Clean Top Row: ONLY Enlarged Title + % Change
+  // Clean Top Row: ONLY Enlarged Index Title (percentage moved to large left hero tile)
+  const headerCenterY = isHero ? 44 : isCompact ? 29 : 35;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.font = `900 ${isHero ? 44 : 31}px ${FONT}`;
+  ctx.font = `900 ${isHero ? 48 : isCompact ? 33 : 36}px ${FONT}`;
   ctx.fillStyle = light ? (isHero ? '#78350F' : '#0F172A') : isHero ? '#FEF3C7' : '#F8FAFC';
-  ctx.fillText(item.name, x + (isHero ? 30 : 20), y + (isHero ? 52 : 40));
+  ctx.fillText(item.name, x + (isHero ? 28 : 18), y + headerCenterY, w - (isHero ? 56 : 36));
 
   const valT = easeOutCubic(clamp((localF - enterFrame) / 18, 0, 1));
   const curVal = lerp(0, item.changePct, valT);
   const valStr = `${curVal >= 0 ? '+' : ''}${curVal.toFixed(2)}%`;
-  ctx.textAlign = 'right';
-  ctx.font = `900 ${isHero ? 78 : 46}px ${MONO}`;
-  ctx.fillStyle = pctColor;
-  ctx.fillText(valStr, x + w - (isHero ? 30 : 16), y + (isHero ? 54 : 40));
 
-  // Charts Row: 日K + full-day 分时
-  const padX = isHero ? 28 : 16;
-  const chartTop = y + (isHero ? 108 : 78);
-  const chartH = isHero ? h - 188 : h - 92;
-  const kW = isHero ? 300 : Math.min(300, Math.round((w - padX * 2 - 10) * 0.35));
-  const intraW = w - padX * 2 - kW - (isHero ? 16 : 10);
+  // Hero readout color: Gold if explicit override on A50 Hero, else Red up / Emerald Green down
+  const heroNumColor = options?.accentColorOverride
+    ? options.accentColorOverride
+    : light
+      ? isPos
+        ? '#DC2626'
+        : '#059669'
+      : isPos
+        ? '#F87171'
+        : '#34D399';
 
-  const todayCandleT = clamp((localF - enterFrame - 4) / 22, 0, 1);
+  // Content Row: Left Giant Percentage Tile (with 3-chevron arrow backdrop) + Right Full-Day 分时
+  const padX = isHero ? 24 : 14;
+  const chartTop = y + (isHero ? 88 : isCompact ? 54 : 68);
+  const chartH = isHero ? h - 202 : h - (isCompact ? 66 : 82);
+  const kW = isHero ? 336 : Math.min(286, Math.round((w - padX * 2 - 10) * 0.42));
+  const intraW = w - padX * 2 - kW - (isHero ? 14 : 10);
+
   const intraDrawT = clamp((localF - enterFrame - 6) / 34, 0, 1);
   const loopPhase = ((localF + enterFrame) % 90) / 90;
 
-  drawMiniDailyCandles(
+  drawChangePctHeroBox(
     ctx,
     x + padX,
     chartTop,
     kW,
     chartH,
-    item.dailyCandles,
-    todayCandleT,
+    item.changePct,
+    valStr,
+    localF,
+    enterFrame,
+    heroNumColor,
     light ? (isHero ? '#92400E' : '#475569') : isHero ? '#FDE68A' : '#94A3B8',
     isHero,
     light
@@ -748,7 +969,7 @@ export function drawCleanIndexCard(
 
   drawMiniIntradayChart(
     ctx,
-    x + padX + kW + (isHero ? 16 : 10),
+    x + padX + kW + (isHero ? 14 : 10),
     chartTop,
     intraW,
     chartH,
@@ -759,19 +980,28 @@ export function drawCleanIndexCard(
     loopPhase,
     light ? (isHero ? '#92400E' : '#475569') : isHero ? '#FDE68A' : '#94A3B8',
     isHero,
-    light
+    light,
+    item.extremeLowTag
   );
 
   if (heroShapeNote) {
     const noteStart = options?.heroNoteStartFrame ?? enterFrame + 30;
     const noteEnd = options?.heroNoteEndFrame ?? noteStart + 32;
     const noteRes = sliceTypewriterText(heroShapeNote, localF, noteStart, noteEnd);
+    const noteSize = polished ? 36 : 36;
     ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.font = `800 29px ${FONT}`;
+    ctx.textBaseline = 'top';
+    ctx.font = `800 ${noteSize}px ${FONT}`;
     ctx.fillStyle = light ? '#92400E' : '#FDE68A';
     const caret = noteRes.typing && Math.floor(localF / 7) % 2 === 0 ? ' ▌' : '';
-    ctx.fillText(noteRes.visible + caret, x + 28, y + h - 42);
+    drawWrappedText(
+      ctx,
+      noteRes.visible + caret,
+      x + 26,
+      y + h - 98,
+      w - 52,
+      noteSize + 8
+    );
   }
 
   ctx.restore();
@@ -796,7 +1026,9 @@ export function drawTypewriterSummaryStrip(
   titleSize: number,
   bodySize: number,
   holdPauseUntilFrame?: number,
-  light = false
+  light = false,
+  polished = false,
+  activeGlow = false
 ): void {
   if (localF < titleFrame) return;
 
@@ -816,6 +1048,11 @@ export function drawTypewriterSummaryStrip(
     ctx.shadowBlur = 12;
     ctx.shadowOffsetY = 4;
     ctx.fillStyle = '#F8FAFC';
+  } else if (polished) {
+    const bg = ctx.createLinearGradient(x, y, x + w, y + h);
+    bg.addColorStop(0, activeGlow ? 'rgba(17, 25, 42, 0.96)' : 'rgba(11, 16, 28, 0.92)');
+    bg.addColorStop(1, 'rgba(6, 9, 16, 0.94)');
+    ctx.fillStyle = bg;
   } else {
     ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
   }
@@ -823,30 +1060,35 @@ export function drawTypewriterSummaryStrip(
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
-  ctx.strokeStyle = light ? '#CBD5E1' : 'rgba(255, 255, 255, 0.1)';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = light
+    ? '#CBD5E1'
+    : activeGlow
+      ? `${accentColor}88`
+      : 'rgba(255, 255, 255, 0.1)';
+  ctx.lineWidth = activeGlow ? 1.6 : 1;
   ctx.stroke();
 
   ctx.fillStyle = accentColor;
-  roundRect(ctx, x, y + 12, 6, h - 24, 3);
+  roundRect(ctx, x, y + 10, 6, h - 20, 3);
   ctx.fill();
 
+  const topPad = h <= 162 ? 10 : 12;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.font = `900 ${titleSize}px ${FONT}`;
   ctx.fillStyle = accentColor;
-  ctx.fillText(title, x + 22, y + 12);
+  ctx.fillText(title, x + 20, y + topPad);
 
   if (localF >= typeStartFrame) {
     ctx.font = `600 ${bodySize}px ${FONT}`;
-    ctx.fillStyle = light ? '#1E293B' : '#E2E8F0';
+    ctx.fillStyle = light ? '#1E293B' : '#F1F5F9';
     drawWrappedText(
       ctx,
       typed.visible + caret,
-      x + 22,
-      y + 16 + titleSize + 8,
-      w - 40,
-      bodySize + 9
+      x + 20,
+      y + topPad + titleSize + (h <= 162 ? 6 : 8),
+      w - 38,
+      bodySize + (h <= 162 ? 7 : 8)
     );
   }
   ctx.restore();

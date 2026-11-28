@@ -114,7 +114,29 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           ? '11.20 盘前风向（v1 存档版）'
           : PROJECT_TEMPLATES[projectMode === 'morning_brief' ? 'morning_brief' : '1117_close'].name;
 
-  const handleDownloadWav = () => {
+  const handleDownloadWav = async () => {
+    if (isEpisode && activeEpisode) {
+      try {
+        const res = await fetch(
+          `/api/audio/bgm.wav?episodeId=${encodeURIComponent(activeEpisode.id)}&t=${Date.now()}`,
+          { cache: 'no-store' }
+        );
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${activeEpisode.id}_editorial_mix.wav`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 10_000);
+          return;
+        }
+      } catch {
+        // Fallback to local synthesis below
+      }
+    }
     const { blob, filename } = buildTrackWavBlob(
       trackKey,
       isEpisode && activeEpisode ? activeEpisode : undefined

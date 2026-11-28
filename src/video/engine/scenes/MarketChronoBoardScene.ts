@@ -11,6 +11,7 @@ import {
   drawCleanIndexCard,
   drawHeaderProgress,
   drawTypewriterSummaryStrip,
+  drawWrappedText,
   easeOutBack,
   roundRect,
   type SceneRenderContext,
@@ -139,6 +140,120 @@ function drawCalmCommoditiesCard(
 const BRUSH_FONT =
   '"Ma Shan Zheng", "ZCOOL QingKe HuangYou", "Noto Sans SC", "PingFang SC", sans-serif';
 
+function drawCompactPolishedCommodityCard(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  data: MarketBoardSceneData,
+  thresholdPct: number,
+  localF: number,
+  enterFrame: number,
+  typeStartFrame: number,
+  typeEndFrame: number,
+  activeGlow: boolean
+): void {
+  if (localF < enterFrame) return;
+
+  const p = getCardEnterProgress(localF, enterFrame, 16);
+  const e = easeOutCubic(p);
+
+  ctx.save();
+  ctx.globalAlpha = clamp(p * 1.6, 0, 1);
+  ctx.translate(0, lerp(30, 0, e));
+
+  if (activeGlow) {
+    ctx.shadowColor = 'rgba(245, 158, 11, 0.25)';
+    ctx.shadowBlur = 22;
+  }
+  const bg = ctx.createLinearGradient(x, y, x, y + h);
+  bg.addColorStop(0, activeGlow ? '#12192A' : '#0B111E');
+  bg.addColorStop(1, '#050810');
+  ctx.fillStyle = bg;
+  roundRect(ctx, x, y, w, h, 14);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.strokeStyle = activeGlow ? '#F59E0B' : 'rgba(255, 255, 255, 0.14)';
+  ctx.lineWidth = activeGlow ? 2 : 1.2;
+  ctx.stroke();
+
+  // Top specular rim
+  const rim = ctx.createLinearGradient(x + 18, y, x + w - 18, y);
+  rim.addColorStop(0, 'rgba(255,255,255,0)');
+  rim.addColorStop(0.5, activeGlow ? 'rgba(251, 191, 36, 0.38)' : 'rgba(255,255,255,0.16)');
+  rim.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = rim;
+  ctx.fillRect(x + 18, y + 1, w - 36, 1.5);
+
+  ctx.fillStyle = '#F59E0B';
+  roundRect(ctx, x, y + 12, 6, h - 24, 3);
+  ctx.fill();
+
+  // Header row (enlarged headline + clear threshold tag)
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.font = `900 37px ${FONT}`;
+  ctx.fillStyle = '#FBBF24';
+  ctx.fillText(data.commodityHeadline, x + 22, y + 30, w - 236);
+
+  ctx.textAlign = 'right';
+  ctx.font = `700 22px ${MONO}, ${FONT}`;
+  ctx.fillStyle = '#94A3B8';
+  ctx.fillText(`±${thresholdPct.toFixed(1)}% 平稳过滤`, x + w - 20, y + 30);
+
+  // 4 compact glass commodity tiles with larger legible labels & percentages
+  const previewItems = data.commodityWatchlist.slice(0, 4);
+  if (previewItems.length > 0) {
+    const tileGap = 12;
+    const tileW = Math.floor((w - 44 - tileGap * (previewItems.length - 1)) / previewItems.length);
+    const tileY = y + 54;
+    const tileH = 82;
+
+    previewItems.forEach((item, idx) => {
+      const tx = x + 22 + idx * (tileW + tileGap);
+      ctx.fillStyle = 'rgba(7, 11, 20, 0.9)';
+      roundRect(ctx, tx, tileY, tileW, tileH, 10);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.font = `700 23px ${FONT}`;
+      ctx.fillStyle = '#E2E8F0';
+      ctx.fillText(item.name, tx + tileW / 2, tileY + 10, tileW - 12);
+
+      const sign = item.changePct >= 0 ? '+' : '';
+      ctx.font = `900 30px ${MONO}`;
+      ctx.fillStyle = item.changePct >= 0 ? '#F87171' : '#34D399';
+      ctx.fillText(`${sign}${item.changePct.toFixed(2)}%`, tx + tileW / 2, tileY + 44, tileW - 12);
+    });
+  }
+
+  // Bottom 2-line wrapped typewriter explanation (enlarged 31px, crisp readability!)
+  const chars = Array.from(data.commodityReason);
+  const typeT =
+    localF < typeStartFrame
+      ? 0
+      : clamp((localF - typeStartFrame) / Math.max(1, typeEndFrame - typeStartFrame), 0, 1);
+  const visible = typeT <= 0 ? '' : chars.slice(0, Math.max(1, Math.floor(typeT * chars.length))).join('');
+  const typing = typeT > 0 && typeT < 1;
+  const caret = typing && Math.floor(localF / 6) % 2 === 0 ? '▌' : '';
+
+  if (visible) {
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.font = `600 31px ${FONT}`;
+    ctx.fillStyle = '#F1F5F9';
+    drawWrappedText(ctx, visible + caret, x + 22, y + 148, w - 44, 38);
+  }
+
+  ctx.restore();
+}
+
 /**
  * Animated brush-calligraphy two-tone hero title styled after the poster headlines:
  * jagged black/crimson paint splash ribbon + slanted white/gold extruded characters +
@@ -149,7 +264,10 @@ function drawAnimatedBrushHeroTitle(
   width: number,
   heroTitle: string,
   localF: number,
-  light: boolean
+  light: boolean,
+  customCenterY = 82,
+  customFontSize = 92,
+  customRibbonW = 910
 ): void {
   const enterT = clamp(localF / 18, 0, 1);
   const slamScale = lerp(1.26, 1.0, easeOutBack(enterT));
@@ -163,13 +281,13 @@ function drawAnimatedBrushHeroTitle(
   const rightPart = match ? match[2] : '';
 
   const centerX = width / 2;
-  const centerY = 82;
+  const centerY = customCenterY;
 
   ctx.save();
   ctx.translate(centerX, centerY);
 
   // 1) Crimson & black jagged brush-splash backing ribbon (slashes in left->right)
-  const ribbonW = 910 * ribbonT;
+  const ribbonW = customRibbonW * ribbonT;
   const ribbonHalfW = ribbonW / 2;
   ctx.save();
   ctx.globalAlpha = clamp(localF / 8, 0, 1);
@@ -252,7 +370,7 @@ function drawAnimatedBrushHeroTitle(
   ctx.transform(1, -0.02, -0.14, 1, 0, 0);
   ctx.globalAlpha = clamp(localF / 7, 0, 1);
 
-  const fontSize = 92;
+  const fontSize = customFontSize;
   ctx.font = `900 ${fontSize}px ${BRUSH_FONT}`;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
@@ -357,11 +475,14 @@ export function renderMarketChronoBoardScene(
   const isLight = data.theme === 'light';
   const minimalHeader = Boolean(data.minimalHeader || data.centeredHeroTitle);
 
-  ctx.fillStyle = isLight ? '#FFFFFF' : minimalHeader ? '#000000' : '#090D14';
+  const safeInset = Boolean(data.safeInset);
+  const polished = Boolean(data.polished || safeInset);
+
+  ctx.fillStyle = isLight ? '#FFFFFF' : minimalHeader || safeInset ? '#000000' : '#090D14';
   ctx.fillRect(0, 0, width, height);
 
   // Subtle grid background
-  ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.035)' : 'rgba(255, 255, 255, 0.03)';
+  ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.035)' : 'rgba(255, 255, 255, 0.026)';
   ctx.lineWidth = 1;
   for (let gx = 0; gx <= width; gx += 60) {
     ctx.beginPath();
@@ -374,6 +495,210 @@ export function renderMarketChronoBoardScene(
     ctx.moveTo(0, gy);
     ctx.lineTo(width, gy);
     ctx.stroke();
+  }
+
+  // Dedicated 4-side Douyin-safe & polished obsidian layout branch
+  if (safeInset) {
+    const activeStage =
+      localF >= timing.a50Start
+        ? 3
+        : localF >= timing.commodityStart
+          ? 2
+          : localF >= timing.asiaStart
+            ? 1
+            : 0;
+
+    // Soft visual-guidance ambient spotlight following active row
+    const spotYTargets = [367, 750, 1073, 1455];
+    const spotColors = [
+      'rgba(56, 189, 248, 0.12)',
+      'rgba(52, 211, 153, 0.12)',
+      'rgba(245, 158, 11, 0.12)',
+      'rgba(251, 191, 36, 0.16)',
+    ];
+    const spotY = spotYTargets[activeStage];
+    const aura = ctx.createRadialGradient(width / 2, spotY, 40, width / 2, spotY, 560);
+    aura.addColorStop(0, spotColors[activeStage]);
+    aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = aura;
+    ctx.fillRect(0, 0, width, height);
+
+    // Full-bleed top hairline progress + generous safe-margin card grid
+    const padX = 44;
+    const fullW = width - padX * 2; // 992px
+    const gap = 16;
+    const colW = (fullW - gap) / 2; // 488px
+    const xLeft = padX;
+    const xRight = padX + colW + gap;
+
+    const progress = clamp(frame / Math.max(1, totalFrames - 1), 0, 1);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+    ctx.fillRect(0, 8, width, 5);
+    ctx.fillStyle = '#FACC15';
+    ctx.fillRect(0, 8, Math.max(12, width * progress), 5);
+
+    // Refined Brush Hero Title inside safe top lane
+    const heroTitle = data.centeredHeroTitle ?? episode.title;
+    drawAnimatedBrushHeroTitle(ctx, width, heroTitle, localF, false, 122, 80, 890);
+
+    // Left-edge subtle visual guidance progress rail (4 glowing step nodes)
+    const railX = 22;
+    const railNodesY = [288, 672, 1073, 1455];
+    const railColors = ['#38BDF8', '#34D399', '#F59E0B', '#FACC15'];
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(railX, railNodesY[0]);
+    ctx.lineTo(railX, railNodesY[3]);
+    ctx.stroke();
+
+    const beamY = railNodesY[activeStage];
+    const beamGrad = ctx.createLinearGradient(0, railNodesY[0], 0, beamY);
+    beamGrad.addColorStop(0, '#38BDF8');
+    beamGrad.addColorStop(1, railColors[activeStage]);
+    ctx.strokeStyle = beamGrad;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(railX, railNodesY[0]);
+    ctx.lineTo(railX, beamY);
+    ctx.stroke();
+
+    railNodesY.forEach((ny, idx) => {
+      const reached = idx <= activeStage;
+      const isCur = idx === activeStage;
+      if (isCur) {
+        ctx.fillStyle = `${railColors[idx]}44`;
+        ctx.beginPath();
+        ctx.arc(railX, ny, 12, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = reached ? railColors[idx] : 'rgba(255, 255, 255, 0.22)';
+      ctx.beginPath();
+      ctx.arc(railX, ny, isCur ? 6 : 4, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+
+    // PART 1: US Markets (y = 180..392, summary y = 400..558 with enlarged 39px/32px typography!)
+    const usActive = activeStage === 0;
+    drawCleanIndexCard(ctx, xLeft, 180, colW, 212, data.usIndices[0], localF, timing.usStart, 'left', {
+      light: false,
+      polished: true,
+      activeGlow: usActive,
+    });
+    drawCleanIndexCard(ctx, xRight, 180, colW, 212, data.usIndices[1], localF, timing.usStart + 4, 'right', {
+      light: false,
+      polished: true,
+      activeGlow: usActive,
+    });
+    drawTypewriterSummaryStrip(
+      ctx,
+      xLeft,
+      400,
+      fullW,
+      158,
+      '#FBBF24',
+      data.usHeadline,
+      data.usReason,
+      localF,
+      timing.usHeadlineFrame,
+      timing.usTypeStart,
+      timing.usTypeEnd,
+      39,
+      32,
+      timing.asiaStart,
+      false,
+      true,
+      usActive
+    );
+
+    // PART 2: Asia Open (y = 570..778, summary y = 786..942 with enlarged 38px/32px typography!)
+    const asiaActive = activeStage === 1;
+    drawCleanIndexCard(ctx, xLeft, 570, colW, 208, data.asiaIndices[0], localF, timing.asiaStart, 'left', {
+      light: false,
+      polished: true,
+      activeGlow: asiaActive,
+    });
+    drawCleanIndexCard(ctx, xRight, 570, colW, 208, data.asiaIndices[1], localF, timing.asiaStart + 4, 'right', {
+      light: false,
+      polished: true,
+      activeGlow: asiaActive,
+    });
+    drawTypewriterSummaryStrip(
+      ctx,
+      xLeft,
+      786,
+      fullW,
+      156,
+      '#34D399',
+      data.asiaHeadline,
+      data.asiaReason,
+      localF,
+      timing.asiaStart + 10,
+      timing.asiaTypeStart,
+      timing.asiaTypeEnd,
+      38,
+      32,
+      undefined,
+      false,
+      true,
+      asiaActive
+    );
+
+    // PART 3: Commodities (y = 954..1206, height = 252 with enlarged 37px title + 31px 2-line explanation!)
+    const comActive = activeStage === 2;
+    const thresholdPct = data.anomalyThresholdPct ?? 2.5;
+    const anomalies = selectAnomalousCommodities(data.commodityWatchlist, thresholdPct);
+    const anomCharts = anomalies
+      .map((a) => data.commodityCharts[a.id])
+      .filter((c): c is CleanIndexChartItem => Boolean(c));
+
+    if (anomCharts.length >= 2) {
+      drawCleanIndexCard(ctx, xLeft, 954, colW, 252, anomCharts[0], localF, timing.commodityStart, 'left', {
+        light: false,
+        polished: true,
+        activeGlow: comActive,
+      });
+      drawCleanIndexCard(ctx, xRight, 954, colW, 252, anomCharts[1], localF, timing.commodityStart + 4, 'right', {
+        light: false,
+        polished: true,
+        activeGlow: comActive,
+      });
+    } else if (anomCharts.length === 1) {
+      drawCleanIndexCard(ctx, xLeft, 954, fullW, 252, anomCharts[0], localF, timing.commodityStart, 'up', {
+        light: false,
+        polished: true,
+        activeGlow: comActive,
+      });
+    } else {
+      drawCompactPolishedCommodityCard(
+        ctx,
+        xLeft,
+        954,
+        fullW,
+        252,
+        data,
+        thresholdPct,
+        localF,
+        timing.commodityStart,
+        timing.commodityTypeStart,
+        timing.commodityTypeEnd,
+        comActive
+      );
+    }
+
+    // PART 4: A50 Oversized Hero Card (y = 1218..1694, height = 476, leaving 226px Douyin bottom safe zone!)
+    drawCleanIndexCard(ctx, xLeft, 1218, fullW, 476, data.a50Hero, localF, timing.a50Start, 'bottom', {
+      accentColorOverride: '#FBBF24',
+      heroShapeNote: data.a50Hero.intradayShapeNote,
+      heroNoteStartFrame: timing.a50NoteStart,
+      heroNoteEndFrame: timing.a50NoteEnd,
+      light: false,
+      polished: true,
+      activeGlow: activeStage === 3,
+    });
+    return;
   }
 
   if (minimalHeader) {
@@ -392,7 +717,7 @@ export function renderMarketChronoBoardScene(
       totalFrames,
       width,
       seriesTitle: episode.seriesTitle,
-      tag: data.headerTag ?? 'MARKETS · 全天分时与日K',
+      tag: data.headerTag ?? 'MARKETS · 涨跌幅与全天分时',
       dark: !isLight,
     });
 
@@ -427,7 +752,7 @@ export function renderMarketChronoBoardScene(
     localF,
     timing.usStart,
     'left',
-    { light: isLight }
+    { light: isLight, polished }
   );
   drawCleanIndexCard(
     ctx,
@@ -439,7 +764,7 @@ export function renderMarketChronoBoardScene(
     localF,
     timing.usStart + 4,
     'right',
-    { light: isLight }
+    { light: isLight, polished }
   );
 
   drawTypewriterSummaryStrip(
@@ -447,7 +772,7 @@ export function renderMarketChronoBoardScene(
     xLeft,
     418 + (minimalHeader ? 6 : 0),
     fullW,
-    minimalHeader ? 160 : 166,
+    minimalHeader ? 162 : 168,
     usStripAccent,
     data.usHeadline,
     data.usReason,
@@ -455,13 +780,14 @@ export function renderMarketChronoBoardScene(
     timing.usHeadlineFrame,
     timing.usTypeStart,
     timing.usTypeEnd,
-    36,
-    27,
+    41,
+    33,
     timing.asiaStart,
-    isLight
+    isLight,
+    polished
   );
 
-  // PART 2: Asia Open (Row 2, y=598..846) + Typewriter Summary (y=856..994)
+  // PART 2: Asia Open (Row 2, y=598..846) + Typewriter Summary (y=856..1002)
   drawCleanIndexCard(
     ctx,
     xLeft,
@@ -472,7 +798,7 @@ export function renderMarketChronoBoardScene(
     localF,
     timing.asiaStart,
     'left',
-    { light: isLight }
+    { light: isLight, polished }
   );
   drawCleanIndexCard(
     ctx,
@@ -484,7 +810,7 @@ export function renderMarketChronoBoardScene(
     localF,
     timing.asiaStart + 4,
     'right',
-    { light: isLight }
+    { light: isLight, polished }
   );
 
   drawTypewriterSummaryStrip(
@@ -492,7 +818,7 @@ export function renderMarketChronoBoardScene(
     xLeft,
     856,
     fullW,
-    138,
+    148,
     asiaStripAccent,
     data.asiaHeadline,
     data.asiaReason,
@@ -500,13 +826,14 @@ export function renderMarketChronoBoardScene(
     timing.asiaStart + 10,
     timing.asiaTypeStart,
     timing.asiaTypeEnd,
-    31,
-    26,
+    39,
+    32,
     undefined,
-    isLight
+    isLight,
+    polished
   );
 
-  // PART 3: Anomalous Commodities Only (Row 3, y=1008..1256)
+  // PART 3: Anomalous Commodities Only (Row 3, y=1014..1254)
   const thresholdPct = data.anomalyThresholdPct ?? 2.5;
   const anomalies = selectAnomalousCommodities(data.commodityWatchlist, thresholdPct);
   const anomCharts = anomalies
@@ -517,47 +844,47 @@ export function renderMarketChronoBoardScene(
     drawCleanIndexCard(
       ctx,
       xLeft,
-      1008,
+      1014,
       colW,
-      248,
+      240,
       anomCharts[0],
       localF,
       timing.commodityStart,
       'left',
-      { light: isLight }
+      { light: isLight, polished }
     );
     drawCleanIndexCard(
       ctx,
       xRight,
-      1008,
+      1014,
       colW,
-      248,
+      240,
       anomCharts[1],
       localF,
       timing.commodityStart + 4,
       'right',
-      { light: isLight }
+      { light: isLight, polished }
     );
   } else if (anomCharts.length === 1) {
     drawCleanIndexCard(
       ctx,
       xLeft,
-      1008,
+      1014,
       fullW,
-      248,
+      240,
       anomCharts[0],
       localF,
       timing.commodityStart,
       'up',
-      { light: isLight }
+      { light: isLight, polished }
     );
   } else {
     drawCalmCommoditiesCard(
       ctx,
       xLeft,
-      1008,
+      1014,
       fullW,
-      248,
+      240,
       data,
       thresholdPct,
       localF,
@@ -570,9 +897,9 @@ export function renderMarketChronoBoardScene(
   drawTypewriterSummaryStrip(
     ctx,
     xLeft,
-    1266,
+    1264,
     fullW,
-    138,
+    148,
     comStripAccent,
     data.commodityHeadline,
     data.commodityReason,
@@ -580,10 +907,11 @@ export function renderMarketChronoBoardScene(
     timing.commodityStart + 10,
     timing.commodityTypeStart,
     timing.commodityTypeEnd,
-    31,
-    26,
+    39,
+    32,
     undefined,
-    isLight
+    isLight,
+    polished
   );
 
   // PART 4: A50 Full-Width Oversized Hero Row (y=1420..1882, height=462)
@@ -593,5 +921,6 @@ export function renderMarketChronoBoardScene(
     heroNoteStartFrame: timing.a50NoteStart,
     heroNoteEndFrame: timing.a50NoteEnd,
     light: isLight,
+    polished,
   });
 }

@@ -10,7 +10,12 @@ import {
   getHookExitState,
   selectAnomalousCommodities,
 } from './timeline';
-import { synthesizeEpisodeAudioPcm } from './audioSynth';
+import {
+  decodeWavToMonoFloat32,
+  encodeMonoWav,
+  mixVoiceoverIntoStereoPcm,
+  synthesizeEpisodeAudioPcm,
+} from './audioSynth';
 import { encodeStereoWav } from '../audio/synthAudio';
 import { validateEpisodeManifest } from '../../../scripts/validate-episode';
 import {
@@ -226,3 +231,109 @@ test('2026-11-26 hook-free poster episode compiles, synthesizes audio, collects 
   assert.equal(report.errors.length, 0);
   assert.equal(report.warnings.length, 0);
 });
+
+test('2026-11-26-v3 flagship episode compiles 7 scenes, verifies assets on disk, synthesizes studio audio, and mixes voiceover with RMS ducking', () => {
+  const epV3Path = path.join(PROJECT_ROOT, 'episodes', '2026-11-26-v3', 'episode.json');
+  const epV3 = JSON.parse(fs.readFileSync(epV3Path, 'utf8')) as EpisodeManifest;
+
+  const tl = compileEpisodeTimeline(epV3);
+  assert.equal(tl.shots.length, 7);
+  assert.equal(tl.totalFrames, 1359);
+  assert.equal(tl.shots[0].kind, 'v3_conflict_hook');
+  assert.equal(tl.shots[1].kind, 'v3_market_pulse');
+  assert.equal(tl.shots[2].kind, 'v3_ashare_anchor');
+  assert.equal(tl.shots[3].kind, 'v3_editorial_story');
+  assert.equal(tl.shots[4].kind, 'v3_editorial_story');
+  assert.equal(tl.shots[5].kind, 'v3_editorial_story');
+  assert.equal(tl.shots[6].kind, 'v3_action_cheatsheet');
+
+  const assets = collectEpisodeAssetSources(epV3);
+  assert.equal(assets.imageSrcs.length, 3);
+  for (const relSrc of assets.imageSrcs) {
+    const absPath = path.join(PROJECT_ROOT, relSrc.replace(/^\//, ''));
+    assert.ok(fs.existsSync(absPath), `Expected generated v3 editorial asset on disk: ${absPath}`);
+  }
+
+  // Every v3 scene has a concise narration script
+  for (const shot of tl.shots) {
+    assert.ok(
+      typeof shot.scene.narration === 'string' && shot.scene.narration.trim().length > 8,
+      `Scene ${shot.id} should include narration script`
+    );
+  }
+
+  // Studio audio synthesis
+  const bgm = synthesizeEpisodeAudioPcm(epV3, 22050);
+  assert.equal(bgm.left.length, Math.floor(22050 * tl.durationSec));
+  let peak = 0;
+  for (let i = 0; i < bgm.left.length; i += 97) {
+    peak = Math.max(peak, Math.abs(bgm.left[i]), Math.abs(bgm.right[i]));
+  }
+  assert.ok(peak > 0.1 && peak <= 1.0, `Expected bounded studio PCM, got peak=${peak}`);
+
+  // Mono WAV roundtrip + voiceover RMS ducking
+  const testVoice = new Float32Array(24000);
+  for (let i = 0; i < testVoice.length; i++) {
+    testVoice[i] = Math.sin((2 * Math.PI * 240 * i) / 24000) * 0.45;
+  }
+  const wavBytes = encodeMonoWav(testVoice, 24000);
+  const decoded = decodeWavToMonoFloat32(wavBytes);
+  assert.equal(decoded.sampleRate, 24000);
+  assert.equal(decoded.samples.length, 24000);
+
+  const mixed = mixVoiceoverIntoStereoPcm(bgm, decoded.samples, decoded.sampleRate, -13);
+  assert.equal(mixed.left.length, bgm.left.length);
+  assert.equal(mixed.right.length, bgm.right.length);
+});
+
+test('2026-11-26-v4 refined pure-black episode compiles 5 scenes, loads real meme hook & 3 posters, synthesizes cinema_impact audio, and passes strict validation', () => {
+  const epV4Path = path.join(PROJECT_ROOT, 'episodes', '2026-11-26-v4', 'episode.json');
+  const epV4 = JSON.parse(fs.readFileSync(epV4Path, 'utf8')) as EpisodeManifest;
+
+  const tl = compileEpisodeTimeline(epV4);
+  assert.equal(tl.shots.length, 5);
+  assert.equal(tl.totalFrames, 1218);
+  assert.equal(tl.bpm, 122);
+  assert.equal(tl.shots[0].kind, 'hook_live_video');
+  assert.equal(tl.shots[1].kind, 'market_chrono_board');
+  assert.equal(tl.shots[2].kind, 'animated_poster_stage');
+  assert.equal(tl.shots[3].kind, 'animated_poster_stage');
+  assert.equal(tl.shots[4].kind, 'animated_poster_stage');
+
+  if (tl.shots[0].scene.kind === 'hook_live_video') {
+    assert.equal(tl.shots[0].scene.data.hookStyle, 'v4_reversal_cut');
+  }
+
+  const v4Styles = tl.shots
+    .slice(2)
+    .map((s) => (s.scene.kind === 'animated_poster_stage' ? s.scene.data.presentationStyle : undefined));
+  assert.deepEqual(v4Styles, ['v4_slice_inflation', 'v4_slice_compute', 'v4_slice_aerospace']);
+
+  const assets = collectEpisodeAssetSources(epV4);
+  assert.equal(assets.hookVideos.length, 1);
+  assert.equal(assets.hookVideos[0].videoSrc, '/episodes/2026-11-26-v4/assets/hook_deepv_reversal.mp4');
+  assert.equal(assets.imageSrcs.length, 4);
+  for (const relSrc of [...assets.imageSrcs, assets.hookVideos[0].videoSrc]) {
+    const absPath = path.join(PROJECT_ROOT, relSrc.replace(/^\//, ''));
+    assert.ok(fs.existsSync(absPath), `Expected v4 asset on disk: ${absPath}`);
+  }
+
+  // Synthesize high-energy cinema_impact audio
+  const bgm = synthesizeEpisodeAudioPcm(epV4, 22050);
+  assert.equal(bgm.left.length, Math.floor(22050 * tl.durationSec));
+  let peak = 0;
+  for (let i = 0; i < bgm.left.length; i += 97) {
+    peak = Math.max(peak, Math.abs(bgm.left[i]), Math.abs(bgm.right[i]));
+  }
+  assert.ok(peak > 0.35 && peak <= 1.0, `Expected punchy cinema_impact PCM, got peak=${peak}`);
+
+  const report = validateEpisodeManifest(epV4, {
+    strictAssetCheck: true,
+    projectRoot: PROJECT_ROOT,
+  });
+  assert.equal(report.ok, true, `2026-11-26-v4 validation failed: ${JSON.stringify(report.errors)}`);
+  assert.equal(report.errors.length, 0);
+  assert.equal(report.warnings.length, 0);
+});
+
+

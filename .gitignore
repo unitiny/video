@@ -7,3 +7,5 @@ coverage/
 .env*
 !.env.example
 .verify*/
+.aistudio/
+episodes/_previews/

@@ -6,7 +6,7 @@ import os from "os";
 import crypto from "crypto";
 import { execFile, spawnSync } from "child_process";
 import { promisify } from "util";
-import { createServer as createViteServer } from "vite";
+import { GoogleGenAI } from "@google/genai";
 
 // src/video/theme.ts
 var VIDEO_SPEC = {
@@ -1437,6 +1437,15 @@ function compileEpisodeTimeline(episode) {
 
 // src/video/engine/audioSynth.ts
 function synthesizeEpisodeAudioPcm(episode, sampleRate = 44100) {
+  if (episode.audio?.mood === "cinema_impact") {
+    return synthesizeCinemaImpactAudioPcm(episode, sampleRate);
+  }
+  if (episode.audio) {
+    return synthesizeStudioV3AudioPcm(episode, sampleRate);
+  }
+  return synthesizeLegacyEpisodeAudioPcm(episode, sampleRate);
+}
+function synthesizeLegacyEpisodeAudioPcm(episode, sampleRate = 44100) {
   const tl = compileEpisodeTimeline(episode);
   const durationSec = tl.durationSec;
   const totalSamples = Math.floor(sampleRate * durationSec);
@@ -1584,13 +1593,737 @@ function synthesizeEpisodeAudioPcm(episode, sampleRate = 44100) {
   }
   return { sampleRate, left, right };
 }
+var STUDIO_MOODS = {
+  editorial_lofi: {
+    // Warm Bloomberg/Financial-Times Rhodes jazz-electronic progression (Dm9 - Bbmaj7 - Gm9 - A7sus4)
+    chords: [
+      [293.66, 349.23, 440, 523.25],
+      [233.08, 293.66, 349.23, 440],
+      [196, 233.08, 293.66, 349.23],
+      [220, 293.66, 329.63, 392]
+    ],
+    bassRoots: [73.42, 58.27, 49, 55],
+    padGain: 0.14,
+    hatGain: 0.055,
+    kickGain: 0.28
+  },
+  tense_pulse: {
+    // Minor urgent pulse (Cm9 - Abmaj7 - Fm9 - Gsus4)
+    chords: [
+      [261.63, 311.13, 392, 466.16],
+      [207.65, 261.63, 311.13, 392],
+      [174.61, 207.65, 261.63, 311.13],
+      [196, 261.63, 293.66, 349.23]
+    ],
+    bassRoots: [65.41, 51.91, 43.65, 49],
+    padGain: 0.12,
+    hatGain: 0.07,
+    kickGain: 0.34
+  },
+  catalyst_drive: {
+    // Uplifting futuristic tech progression (Em9 - Cmaj7 - Dadd9 - Bm7)
+    chords: [
+      [329.63, 392, 493.88, 587.33],
+      [261.63, 329.63, 392, 493.88],
+      [293.66, 369.99, 440, 587.33],
+      [246.94, 293.66, 369.99, 440]
+    ],
+    bassRoots: [82.41, 65.41, 73.42, 61.74],
+    padGain: 0.15,
+    hatGain: 0.065,
+    kickGain: 0.31
+  },
+  cinema_impact: {
+    // High-energy cinematic broadcast progression (Dm - Bb - C - A)
+    chords: [
+      [293.66, 349.23, 440, 587.33],
+      [233.08, 293.66, 349.23, 466.16],
+      [261.63, 329.63, 392, 523.25],
+      [220, 277.18, 329.63, 440]
+    ],
+    bassRoots: [73.42, 58.27, 65.41, 55],
+    padGain: 0.2,
+    hatGain: 0.1,
+    kickGain: 0.44
+  }
+};
+function synthesizeCinemaImpactAudioPcm(episode, sampleRate = 44100) {
+  const tl = compileEpisodeTimeline(episode);
+  const durationSec = tl.durationSec;
+  const totalSamples = Math.floor(sampleRate * durationSec);
+  const left = new Float32Array(totalSamples);
+  const right = new Float32Array(totalSamples);
+  const bpm = tl.bpm || 122;
+  const beatDur = 60 / bpm;
+  const fps = tl.fps || 30;
+  const enableAudioLogo = episode.audio?.audioLogo !== false;
+  const chords = [
+    [293.66, 349.23, 440, 587.33],
+    [233.08, 293.66, 349.23, 466.16],
+    [261.63, 329.63, 392, 523.25],
+    [220, 277.18, 329.63, 440]
+  ];
+  const bassRoots = [73.42, 58.27, 65.41, 55];
+  const cutTimes = tl.cutFrames.map((f) => f / fps);
+  const impactSlams = [];
+  const whooshEvents = [];
+  const chimeEvents = [];
+  const typeWindows = [];
+  const rocketRumbles = [];
+  const shotRanges = [];
+  for (const shot of tl.shots) {
+    const base = shot.startFrame;
+    const sStart = shot.startSec;
+    const sEnd = shot.endSec;
+    if (shot.scene.kind === "hook_live_video") {
+      shotRanges.push({ start: sStart, end: sEnd, energy: 1.2, fullDrums: true });
+      if (shot.scene.data.hookStyle === "v4_reversal_cut") {
+        const cutF = shot.scene.data.reversalConfig?.cutFrame ?? 37;
+        impactSlams.push(
+          { t: (base + 2) / fps, gain: 0.46 },
+          { t: (base + cutF) / fps, gain: 0.68 }
+        );
+        whooshEvents.push(
+          { t: (base + cutF - 2) / fps, pitch: 1180 },
+          { t: (base + shot.durationFrames - 8) / fps, pitch: 920 }
+        );
+        chimeEvents.push(
+          { t: (base + cutF + 2) / fps, freq: 783.99, gain: 0.24 },
+          { t: (base + cutF + 6) / fps, freq: 1046.5, gain: 0.24 }
+        );
+      } else {
+        impactSlams.push({ t: (base + 7) / fps, gain: 0.62 });
+        if (shot.scene.data.memeCard) {
+          const mf = base + shot.scene.data.memeCard.enterFrame;
+          chimeEvents.push(
+            { t: mf / fps, freq: 783.99, gain: 0.22 },
+            { t: (mf + 3) / fps, freq: 1046.5, gain: 0.2 }
+          );
+        }
+        whooshEvents.push({ t: (base + shot.durationFrames - 10) / fps, pitch: 900 });
+      }
+    } else if (shot.scene.kind === "market_chrono_board") {
+      shotRanges.push({ start: sStart, end: sEnd, energy: 0.96, fullDrums: true });
+      const timing = resolveMarketBoardTiming(shot.scene.data.timing);
+      typeWindows.push(
+        [(base + timing.usTypeStart) / fps, (base + timing.usTypeEnd) / fps],
+        [(base + timing.asiaTypeStart) / fps, (base + timing.asiaTypeEnd) / fps],
+        [(base + timing.commodityTypeStart) / fps, (base + timing.commodityTypeEnd) / fps],
+        [(base + timing.a50NoteStart) / fps, (base + timing.a50NoteEnd) / fps]
+      );
+      chimeEvents.push(
+        { t: (base + timing.usStart + 3) / fps, freq: 523.25, gain: 0.16 },
+        { t: (base + timing.asiaStart + 2) / fps, freq: 587.33, gain: 0.16 },
+        { t: (base + timing.commodityStart + 2) / fps, freq: 659.25, gain: 0.15 },
+        { t: (base + timing.a50Start + 3) / fps, freq: 783.99, gain: 0.2 }
+      );
+      impactSlams.push({ t: (base + timing.a50Start) / fps, gain: 0.42 });
+    } else if (shot.scene.kind === "animated_poster_stage") {
+      const style = shot.scene.data.presentationStyle;
+      shotRanges.push({ start: sStart, end: sEnd, energy: 1.14, fullDrums: true });
+      if (style === "v4_slice_inflation") {
+        whooshEvents.push(
+          { t: (base + 40) / fps, pitch: 760 },
+          { t: (base + 108) / fps, pitch: 640 }
+        );
+        impactSlams.push(
+          { t: (base + 8) / fps, gain: 0.52 },
+          { t: (base + 126) / fps, gain: 0.56 }
+        );
+        chimeEvents.push(
+          { t: (base + 48) / fps, freq: 698.46, gain: 0.2 },
+          { t: (base + 118) / fps, freq: 523.25, gain: 0.18 },
+          { t: (base + 126) / fps, freq: 466.16, gain: 0.19 },
+          { t: (base + 134) / fps, freq: 440, gain: 0.19 },
+          { t: (base + 142) / fps, freq: 392, gain: 0.22 }
+        );
+      } else if (style === "v4_slice_compute") {
+        whooshEvents.push(
+          { t: (base + 4) / fps, pitch: 1180 },
+          { t: (base + 46) / fps, pitch: 1420 }
+        );
+        impactSlams.push(
+          { t: (base + 48) / fps, gain: 0.54 },
+          { t: (base + 116) / fps, gain: 0.66 }
+        );
+        chimeEvents.push(
+          { t: (base + 120) / fps, freq: 587.33, gain: 0.2 },
+          { t: (base + 126) / fps, freq: 880, gain: 0.22 }
+        );
+      } else if (style === "v4_slice_aerospace") {
+        rocketRumbles.push([sStart, (base + 34) / fps]);
+        whooshEvents.push(
+          { t: (base + 46) / fps, pitch: 880 },
+          { t: (base + 120) / fps, pitch: 980 }
+        );
+        impactSlams.push(
+          { t: (base + 6) / fps, gain: 0.48 },
+          { t: (base + 54) / fps, gain: 0.44 }
+        );
+        const relayNotes = [587.33, 659.25, 783.99, 880, 1174.66];
+        relayNotes.forEach((f, idx) => {
+          chimeEvents.push({ t: (base + 124 + idx * 9) / fps, freq: f, gain: 0.23 });
+        });
+      } else {
+        shot.scene.data.beats.forEach((b, idx) => {
+          chimeEvents.push({ t: (base + b.enterFrame) / fps, freq: 523.25 + idx * 80, gain: 0.16 });
+        });
+      }
+    } else {
+      shotRanges.push({ start: sStart, end: sEnd, energy: 1, fullDrums: true });
+    }
+  }
+  let lfsr = 1941558303;
+  const nextNoise = () => {
+    lfsr ^= lfsr << 13;
+    lfsr ^= lfsr >>> 17;
+    lfsr ^= lfsr << 5;
+    return (lfsr >>> 0) / 4294967296 * 2 - 1;
+  };
+  let lp = 0;
+  let hpPrev = 0;
+  for (let i = 0; i < totalSamples; i++) {
+    const t = i / sampleRate;
+    let masterEnv = 1;
+    if (t < 0.025) masterEnv = t / 0.025;
+    if (t > durationSec - 0.75) masterEnv = Math.max(0, (durationSec - t) / 0.75);
+    let sceneEnergy = 1;
+    for (let s = 0; s < shotRanges.length; s++) {
+      if (t >= shotRanges[s].start && t < shotRanges[s].end) {
+        sceneEnergy = shotRanges[s].energy;
+        break;
+      }
+    }
+    let breathDuck = 1;
+    for (let c = 0; c < cutTimes.length; c++) {
+      const dc = cutTimes[c] - t;
+      if (dc > 0 && dc < 0.045) {
+        breathDuck = Math.min(breathDuck, 0.28 + dc / 0.045 * 0.72);
+      }
+    }
+    const beatFloat = t / beatDur;
+    const beatIndex = Math.floor(beatFloat);
+    const beatPhase = (beatFloat - beatIndex) * beatDur;
+    const barIndex = Math.floor(beatIndex / 4);
+    const beatInBar = beatIndex % 4;
+    const barPhase = (beatFloat - barIndex * 4) * beatDur;
+    const eighthFloat = beatFloat * 2;
+    const eighthIdx = Math.floor(eighthFloat);
+    const eighthPhase = (eighthFloat - eighthIdx) * (beatDur * 0.5);
+    const sixteenthFloat = beatFloat * 4;
+    const sixteenthIdx = Math.floor(sixteenthFloat);
+    const sixteenthPhase = (sixteenthFloat - sixteenthIdx) * (beatDur * 0.25);
+    const n = nextNoise();
+    lp = lp * 0.8 + n * 0.2;
+    const hp = n - hpPrev * 0.9;
+    hpPrev = n;
+    const sidechain = 0.42 + 0.58 * Math.min(1, beatPhase / 0.14);
+    let kick = 0;
+    if (beatPhase < 0.16) {
+      const kEnv = Math.exp(-beatPhase * 22);
+      const kFreq = 48 + 145 * Math.exp(-beatPhase * 48);
+      const click = beatPhase < 8e-3 ? (1 - beatPhase / 8e-3) * 0.26 : 0;
+      kick = (Math.sin(2 * Math.PI * kFreq * beatPhase) * kEnv * 0.46 + click) * sceneEnergy;
+    }
+    let snareL = 0;
+    let snareR = 0;
+    if ((beatInBar === 1 || beatInBar === 3) && beatPhase < 0.13) {
+      const sEnv = Math.exp(-beatPhase * 26);
+      const body = Math.sin(2 * Math.PI * 195 * beatPhase) * Math.exp(-beatPhase * 38) * 0.22;
+      const snap = hp * sEnv * 0.24;
+      snareL = (body + snap * 1.06) * sceneEnergy;
+      snareR = (body + snap * 0.94) * sceneEnergy;
+    }
+    let hat = 0;
+    const isOffEighth = sixteenthIdx % 4 === 2;
+    const hatAccent = isOffEighth ? 1 : sixteenthIdx % 2 === 1 ? 0.48 : 0.25;
+    if (sixteenthPhase < 0.042) {
+      hat = hp * Math.exp(-sixteenthPhase * (isOffEighth ? 55 : 95)) * 0.11 * hatAccent * sceneEnergy;
+    }
+    const rootFreq = bassRoots[barIndex % bassRoots.length];
+    const bassFreq = eighthIdx % 2 === 1 ? rootFreq * 2 : rootFreq;
+    const bassEnv = Math.exp(-eighthPhase * 5.2);
+    const bassWave = Math.sin(2 * Math.PI * bassFreq * t) * 0.72 + Math.sin(4 * Math.PI * bassFreq * t) * 0.22 + Math.sin(6 * Math.PI * bassFreq * t) * 0.08;
+    const bass = bassWave * bassEnv * sidechain * 0.34 * sceneEnergy;
+    const chord = chords[barIndex % chords.length];
+    const stab1Env = Math.min(1, barPhase / 0.015) * Math.exp(-barPhase * 1.55);
+    const pushPhase = barPhase - beatDur * 2.5;
+    const stab2Env = pushPhase >= 0 ? Math.min(1, pushPhase / 0.012) * Math.exp(-pushPhase * 3.8) * 0.65 : 0;
+    const stabEnv = (stab1Env + stab2Env) * sidechain;
+    let synthL = 0;
+    let synthR = 0;
+    if (stabEnv > 5e-3) {
+      for (let c = 0; c < chord.length; c++) {
+        const f = chord[c];
+        const vL = Math.sin(2 * Math.PI * (f * 0.996) * t) * 0.65 + Math.sin(4 * Math.PI * (f * 0.996) * t) * 0.22 + Math.sin(6 * Math.PI * (f * 0.996) * t) * 0.1;
+        const vR = Math.sin(2 * Math.PI * (f * 1.004) * t) * 0.65 + Math.sin(4 * Math.PI * (f * 1.004) * t) * 0.22 + Math.sin(6 * Math.PI * (f * 1.004) * t) * 0.1;
+        synthL += vL;
+        synthR += vR;
+      }
+      synthL *= 0.068 * stabEnv * sceneEnergy;
+      synthR *= 0.068 * stabEnv * sceneEnergy;
+    }
+    const arpFreq = chord[sixteenthIdx * 3 % chord.length] * (sixteenthIdx % 8 === 7 ? 2 : 1);
+    const arpTone = (Math.sin(2 * Math.PI * arpFreq * t) * 0.72 + Math.sin(4 * Math.PI * arpFreq * t) * 0.24) * Math.exp(-sixteenthPhase * 15) * 0.085 * sidechain * sceneEnergy;
+    const arpPan = (sixteenthIdx % 4 - 1.5) * 0.34;
+    let logoL = 0;
+    let logoR = 0;
+    if (enableAudioLogo && t < 0.55) {
+      const notes = [
+        { onset: 0.01, freq: 587.33, pan: -0.3 },
+        { onset: 0.11, freq: 880, pan: 0 },
+        { onset: 0.21, freq: 1174.66, pan: 0.3 }
+      ];
+      for (const ln of notes) {
+        const dt = t - ln.onset;
+        if (dt >= 0 && dt < 0.34) {
+          const env = Math.min(1, dt / 6e-3) * Math.exp(-dt * 10);
+          const tone = (Math.sin(2 * Math.PI * ln.freq * dt) * 0.75 + Math.sin(2 * Math.PI * ln.freq * 2 * dt) * 0.25) * env * 0.2;
+          logoL += tone * (1 - ln.pan);
+          logoR += tone * (1 + ln.pan);
+        }
+      }
+    }
+    let dataTick = 0;
+    const inTypeWindow = typeWindows.some(([ws, we]) => t >= ws && t <= we);
+    if (inTypeWindow && sixteenthPhase < 0.012) {
+      dataTick = Math.sin(2 * Math.PI * (1520 + sixteenthIdx % 4 * 200) * sixteenthPhase) * Math.exp(-sixteenthPhase * 210) * 0.058;
+    }
+    let sfxL = 0;
+    let sfxR = 0;
+    for (let m = 0; m < impactSlams.length; m++) {
+      const dm = t - impactSlams[m].t;
+      if (dm >= 0 && dm < 0.42) {
+        const subBoom = Math.sin(2 * Math.PI * (185 * Math.exp(-dm * 16) + 42) * dm) * Math.exp(-dm * 9.5) * impactSlams[m].gain;
+        const crunch = (lp * 0.4 + hp * 0.2) * Math.exp(-dm * 18) * impactSlams[m].gain;
+        sfxL += subBoom + crunch;
+        sfxR += subBoom + crunch * 0.92;
+      }
+    }
+    for (let w = 0; w < whooshEvents.length; w++) {
+      const dw = t - whooshEvents[w].t;
+      if (dw >= -0.06 && dw <= 0.24) {
+        const env = dw < 0 ? (dw + 0.06) / 0.06 : Math.exp(-dw * 12);
+        const sweep = Math.sin(2 * Math.PI * (whooshEvents[w].pitch * Math.exp(-Math.max(0, dw) * 7)) * dw);
+        const val = (lp * 0.55 + hp * 0.3 + sweep * 0.14) * env * 0.26;
+        sfxL += val * 1.08;
+        sfxR += val * 0.92;
+      }
+    }
+    for (let c = 0; c < chimeEvents.length; c++) {
+      const dc = t - chimeEvents[c].t;
+      if (dc >= 0 && dc < 0.24) {
+        const tone = (Math.sin(2 * Math.PI * chimeEvents[c].freq * dc) * 0.72 + Math.sin(2 * Math.PI * chimeEvents[c].freq * 2 * dc) * 0.24) * Math.exp(-dc * 14) * chimeEvents[c].gain;
+        const pan = (c % 3 - 1) * 0.25;
+        sfxL += tone * (1 - pan);
+        sfxR += tone * (1 + pan);
+      }
+    }
+    for (let r = 0; r < rocketRumbles.length; r++) {
+      const [rs, re] = rocketRumbles[r];
+      if (t >= rs && t <= re) {
+        const rp = (t - rs) / Math.max(0.05, re - rs);
+        const rumble = (lp * 0.7 + Math.sin(2 * Math.PI * (54 + rp * 26) * t) * 0.35) * Math.sin(rp * Math.PI) * 0.26;
+        sfxL += rumble;
+        sfxR += rumble;
+      }
+    }
+    for (let c = 0; c < cutTimes.length; c++) {
+      const dc = t - cutTimes[c];
+      if (dc >= -0.04 && dc <= 0.22) {
+        const env = dc < 0 ? (dc + 0.04) / 0.04 : Math.exp(-dc * 12);
+        const wsh = (lp * 0.65 + hp * 0.35) * env * 0.24;
+        sfxL += wsh;
+        sfxR += wsh;
+      }
+    }
+    const bedL = (kick + snareL + hat + bass + synthL + arpTone * (1 - arpPan)) * breathDuck;
+    const bedR = (kick + snareR + hat + bass + synthR + arpTone * (1 + arpPan)) * breathDuck;
+    const mixL = (bedL + dataTick + logoL + sfxL) * masterEnv;
+    const mixR = (bedR + dataTick + logoR + sfxR) * masterEnv;
+    left[i] = Math.tanh(mixL * 1.15);
+    right[i] = Math.tanh(mixR * 1.15);
+  }
+  return { sampleRate, left, right };
+}
+function synthesizeStudioV3AudioPcm(episode, sampleRate = 44100) {
+  const tl = compileEpisodeTimeline(episode);
+  const durationSec = tl.durationSec;
+  const totalSamples = Math.floor(sampleRate * durationSec);
+  const left = new Float32Array(totalSamples);
+  const right = new Float32Array(totalSamples);
+  const mood = episode.audio?.mood ?? "editorial_lofi";
+  const profile = STUDIO_MOODS[mood] ?? STUDIO_MOODS.editorial_lofi;
+  const enableAudioLogo = episode.audio?.audioLogo !== false;
+  const bpm = tl.bpm || 108;
+  const beatDur = 60 / bpm;
+  const fps = tl.fps || 30;
+  const cutTimes = tl.cutFrames.map((f) => f / fps);
+  const impactTimes = [];
+  const chimeEvents = [];
+  const stampThudTimes = [];
+  const typeWindows = [];
+  const shotRanges = [];
+  for (const shot of tl.shots) {
+    const sStart = shot.startSec;
+    const sEnd = shot.endSec;
+    const base = shot.startFrame;
+    if (shot.scene.kind === "v3_conflict_hook") {
+      shotRanges.push({ start: sStart, end: sEnd, energy: 1.05 });
+      impactTimes.push((base + 10) / fps);
+      chimeEvents.push(
+        { t: (base + 18) / fps, freq: 587.33 },
+        { t: (base + 26) / fps, freq: 659.25 },
+        { t: (base + 34) / fps, freq: 783.99 }
+      );
+    } else if (shot.scene.kind === "v3_market_pulse") {
+      shotRanges.push({ start: sStart, end: sEnd, energy: 0.92 });
+      chimeEvents.push(
+        { t: (base + 4) / fps, freq: 440 },
+        { t: (base + 12) / fps, freq: 523.25 },
+        { t: (base + 76) / fps, freq: 493.88 },
+        { t: (base + 132) / fps, freq: 587.33 }
+      );
+      typeWindows.push(
+        [(base + 22) / fps, (base + 62) / fps],
+        [(base + 92) / fps, (base + 130) / fps]
+      );
+    } else if (shot.scene.kind === "v3_ashare_anchor") {
+      shotRanges.push({ start: sStart, end: sEnd, energy: 0.95 });
+      chimeEvents.push(
+        { t: (base + 4) / fps, freq: 523.25 },
+        { t: (base + 50) / fps, freq: 587.33 },
+        { t: (base + 60) / fps, freq: 659.25 },
+        { t: (base + 70) / fps, freq: 783.99 },
+        { t: (base + 114) / fps, freq: 880 }
+      );
+      typeWindows.push([(base + 26) / fps, (base + 66) / fps]);
+    } else if (shot.scene.kind === "v3_editorial_story") {
+      const variant = shot.scene.data.variant;
+      shotRanges.push({
+        start: sStart,
+        end: sEnd,
+        energy: variant === "catalyst_chain" ? 1 : 0.88
+      });
+      chimeEvents.push({ t: (base + 10) / fps, freq: 523.25 });
+      if (variant === "macro_gauge") {
+        chimeEvents.push({ t: (base + 58) / fps, freq: 659.25 });
+      } else if (variant === "vs_split_cards") {
+        impactTimes.push((base + 52) / fps);
+        stampThudTimes.push((base + 120) / fps);
+      } else if (variant === "catalyst_chain") {
+        const scale = [523.25, 587.33, 659.25, 783.99, 880];
+        scale.forEach((f, idx) => {
+          chimeEvents.push({ t: (base + 76 + idx * 10) / fps, freq: f });
+        });
+      }
+    } else if (shot.scene.kind === "v3_action_cheatsheet") {
+      shotRanges.push({ start: sStart, end: sEnd, energy: 0.86 });
+      chimeEvents.push(
+        { t: (base + 32) / fps, freq: 587.33 },
+        { t: (base + 76) / fps, freq: 659.25 },
+        { t: (base + 86) / fps, freq: 783.99 },
+        { t: (base + 100) / fps, freq: 880 },
+        { t: (base + 114) / fps, freq: 1046.5 }
+      );
+    } else {
+      shotRanges.push({ start: sStart, end: sEnd, energy: 0.9 });
+    }
+  }
+  let lfsr = 1369961371;
+  const nextNoise = () => {
+    lfsr ^= lfsr << 13;
+    lfsr ^= lfsr >>> 17;
+    lfsr ^= lfsr << 5;
+    return (lfsr >>> 0) / 4294967296 * 2 - 1;
+  };
+  let lp = 0;
+  let hpPrev = 0;
+  for (let i = 0; i < totalSamples; i++) {
+    const t = i / sampleRate;
+    let masterEnv = 1;
+    if (t < 0.03) masterEnv = t / 0.03;
+    if (t > durationSec - 0.85) masterEnv = Math.max(0, (durationSec - t) / 0.85);
+    let sceneEnergy = 0.9;
+    for (let s = 0; s < shotRanges.length; s++) {
+      if (t >= shotRanges[s].start && t < shotRanges[s].end) {
+        sceneEnergy = shotRanges[s].energy;
+        break;
+      }
+    }
+    let breathDuck = 1;
+    for (let c = 0; c < cutTimes.length; c++) {
+      const dc = cutTimes[c] - t;
+      if (dc > 0 && dc < 0.05) {
+        breathDuck = Math.min(breathDuck, 0.35 + dc / 0.05 * 0.65);
+      }
+    }
+    for (let s = 0; s < stampThudTimes.length; s++) {
+      const ds = stampThudTimes[s] - t;
+      if (ds > 0 && ds < 0.06) {
+        breathDuck = Math.min(breathDuck, 0.25 + ds / 0.06 * 0.75);
+      }
+    }
+    const beatFloat = t / beatDur;
+    const beatIndex = Math.floor(beatFloat);
+    const beatPhase = (beatFloat - beatIndex) * beatDur;
+    const barIndex = Math.floor(beatIndex / 4);
+    const beatInBar = beatIndex % 4;
+    const sixteenthFloat = beatFloat * 4;
+    const sixteenthIdx = Math.floor(sixteenthFloat);
+    const sixteenthPhase = (sixteenthFloat - sixteenthIdx) * (beatDur * 0.25);
+    const eighthFloat = beatFloat * 2;
+    const eighthIdx = Math.floor(eighthFloat);
+    const eighthPhase = (eighthFloat - eighthIdx) * (beatDur * 0.5);
+    const n = nextNoise();
+    lp = lp * 0.82 + n * 0.18;
+    const hp = n - hpPrev * 0.88;
+    hpPrev = n;
+    const chord = profile.chords[barIndex % profile.chords.length];
+    const barPhase = (beatFloat - barIndex * 4) * beatDur;
+    const padEnv = Math.min(1, barPhase / 0.04) * Math.exp(-barPhase * 0.72);
+    let padL = 0;
+    let padR = 0;
+    for (let c = 0; c < chord.length; c++) {
+      const f = chord[c];
+      const v = (Math.sin(2 * Math.PI * f * t) * 0.76 + Math.sin(2 * Math.PI * f * 2 * t) * 0.16 * Math.exp(-barPhase * 2.2)) * padEnv;
+      const spread = (c / (chord.length - 1) - 0.5) * 0.45;
+      padL += v * (0.5 - spread);
+      padR += v * (0.5 + spread);
+    }
+    padL *= profile.padGain * sceneEnergy;
+    padR *= profile.padGain * sceneEnergy;
+    const pluckFreq = chord[eighthIdx * 3 % chord.length];
+    const pluck = (Math.sin(2 * Math.PI * pluckFreq * t) * 0.75 + Math.sin(2 * Math.PI * pluckFreq * 2 * t) * 0.14) * Math.exp(-eighthPhase * 8.5) * 0.085 * sceneEnergy;
+    const pluckPan = (eighthIdx % 4 - 1.5) * 0.24;
+    let kick = 0;
+    const isKickBeat = beatInBar === 0 || beatInBar === 2;
+    if (isKickBeat && beatPhase < 0.15) {
+      const kEnv = Math.exp(-beatPhase * 26);
+      const kFreq = 46 + 108 * Math.exp(-beatPhase * 45);
+      kick = Math.sin(2 * Math.PI * kFreq * beatPhase) * kEnv * profile.kickGain * sceneEnergy;
+    }
+    let rim = 0;
+    if ((beatInBar === 1 || beatInBar === 3) && beatPhase < 0.08) {
+      rim = (hp * 0.45 + Math.sin(2 * Math.PI * 340 * beatPhase) * 0.35) * Math.exp(-beatPhase * 46) * 0.11;
+    }
+    let hat = 0;
+    if (eighthIdx % 2 === 1 && eighthPhase < 0.045) {
+      hat = hp * Math.exp(-eighthPhase * 75) * profile.hatGain * sceneEnergy;
+    }
+    const bassFreq = profile.bassRoots[barIndex % profile.bassRoots.length];
+    const bass = (Math.sin(2 * Math.PI * bassFreq * t) * 0.8 + Math.sin(2 * Math.PI * bassFreq * 2 * t) * 0.15) * Math.exp(-beatPhase * 3.4) * 0.22 * sceneEnergy;
+    let dataTick = 0;
+    const inTypeWindow = typeWindows.some(([ws, we]) => t >= ws && t <= we);
+    if (inTypeWindow && sixteenthPhase < 0.012) {
+      dataTick = Math.sin(2 * Math.PI * (1420 + sixteenthIdx % 4 * 180) * sixteenthPhase) * Math.exp(-sixteenthPhase * 220) * 0.042;
+    }
+    let logoL = 0;
+    let logoR = 0;
+    if (enableAudioLogo && t < 0.65) {
+      const notes = [
+        { onset: 0.02, freq: 587.33, pan: -0.25 },
+        { onset: 0.14, freq: 880, pan: 0 },
+        { onset: 0.26, freq: 1174.66, pan: 0.25 }
+      ];
+      for (const ln of notes) {
+        const dt = t - ln.onset;
+        if (dt >= 0 && dt < 0.38) {
+          const env = Math.min(1, dt / 8e-3) * Math.exp(-dt * 9.5);
+          const tone = (Math.sin(2 * Math.PI * ln.freq * dt) * 0.78 + Math.sin(2 * Math.PI * ln.freq * 2 * dt) * 0.22) * env * 0.18;
+          logoL += tone * (1 - ln.pan);
+          logoR += tone * (1 + ln.pan);
+        }
+      }
+    }
+    let sfx = 0;
+    for (let m = 0; m < impactTimes.length; m++) {
+      const dm = t - impactTimes[m];
+      if (dm >= 0 && dm < 0.36) {
+        sfx += Math.sin(2 * Math.PI * (150 * Math.exp(-dm * 14) + 46) * dm) * Math.exp(-dm * 11) * 0.42;
+        sfx += lp * Math.exp(-dm * 18) * 0.12;
+      }
+    }
+    for (let c = 0; c < chimeEvents.length; c++) {
+      const dc = t - chimeEvents[c].t;
+      if (dc >= 0 && dc < 0.2) {
+        sfx += (Math.sin(2 * Math.PI * chimeEvents[c].freq * dc) * 0.8 + Math.sin(2 * Math.PI * chimeEvents[c].freq * 2 * dc) * 0.2) * Math.exp(-dc * 18) * 0.11;
+      }
+    }
+    for (let s = 0; s < stampThudTimes.length; s++) {
+      const ds = t - stampThudTimes[s];
+      if (ds >= 0 && ds < 0.25) {
+        sfx += (Math.sin(2 * Math.PI * (110 * Math.exp(-ds * 18) + 52) * ds) * 0.56 + lp * 0.32) * Math.exp(-ds * 18);
+      }
+    }
+    for (let c = 0; c < cutTimes.length; c++) {
+      const dc = t - cutTimes[c];
+      if (dc >= -0.05 && dc <= 0.2) {
+        const env = dc < 0 ? (dc + 0.05) / 0.05 : Math.exp(-dc * 13);
+        sfx += (lp * 0.7 + hp * 0.25) * env * 0.16;
+      }
+    }
+    const bedL = (padL + kick + rim + hat + bass + pluck * (1 - pluckPan)) * breathDuck;
+    const bedR = (padR + kick + rim + hat + bass + pluck * (1 + pluckPan)) * breathDuck;
+    const mixL = (bedL + dataTick + logoL + sfx) * masterEnv;
+    const mixR = (bedR + dataTick + logoR + sfx) * masterEnv;
+    left[i] = Math.tanh(mixL * 0.92);
+    right[i] = Math.tanh(mixR * 0.92);
+  }
+  return { sampleRate, left, right };
+}
+function decodeWavToMonoFloat32(wavBytes) {
+  const view = new DataView(wavBytes.buffer, wavBytes.byteOffset, wavBytes.byteLength);
+  if (wavBytes.byteLength < 44) {
+    throw new Error("Invalid WAV buffer: too short");
+  }
+  let offset = 12;
+  let sampleRate = 24e3;
+  let numChannels = 1;
+  let bitsPerSample = 16;
+  let dataOffset = -1;
+  let dataSize = 0;
+  while (offset + 8 <= wavBytes.byteLength) {
+    const chunkId = String.fromCharCode(
+      wavBytes[offset],
+      wavBytes[offset + 1],
+      wavBytes[offset + 2],
+      wavBytes[offset + 3]
+    );
+    const chunkSize = view.getUint32(offset + 4, true);
+    const bodyStart = offset + 8;
+    if (chunkId === "fmt " && chunkSize >= 16) {
+      numChannels = view.getUint16(bodyStart + 2, true);
+      sampleRate = view.getUint32(bodyStart + 4, true);
+      bitsPerSample = view.getUint16(bodyStart + 14, true);
+    } else if (chunkId === "data") {
+      dataOffset = bodyStart;
+      dataSize = Math.min(chunkSize, wavBytes.byteLength - bodyStart);
+      break;
+    }
+    offset = bodyStart + chunkSize + chunkSize % 2;
+  }
+  if (dataOffset < 0 || bitsPerSample !== 16) {
+    throw new Error(`Unsupported WAV format (bits=${bitsPerSample}, dataOffset=${dataOffset})`);
+  }
+  const bytesPerFrame = numChannels * 2;
+  const frameCount = Math.floor(dataSize / bytesPerFrame);
+  const samples = new Float32Array(frameCount);
+  for (let i = 0; i < frameCount; i++) {
+    let sum = 0;
+    for (let ch = 0; ch < numChannels; ch++) {
+      const sampleIdx = dataOffset + i * bytesPerFrame + ch * 2;
+      sum += view.getInt16(sampleIdx, true) / 32768;
+    }
+    samples[i] = sum / numChannels;
+  }
+  return { sampleRate, samples };
+}
+function encodeMonoWav(samples, sampleRate) {
+  const numSamples = samples.length;
+  const dataBytes = numSamples * 2;
+  const buf = new ArrayBuffer(44 + dataBytes);
+  const view = new DataView(buf);
+  const writeStr = (off2, s) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off2 + i, s.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataBytes, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, dataBytes, true);
+  let off = 44;
+  for (let i = 0; i < numSamples; i++) {
+    const v = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(off, v < 0 ? v * 32768 : v * 32767, true);
+    off += 2;
+  }
+  return new Uint8Array(buf);
+}
+function mixVoiceoverIntoStereoPcm(bgm, voiceMono, voiceSampleRate, duckingDb = -13) {
+  const outLen = bgm.left.length;
+  const outL = new Float32Array(outLen);
+  const outR = new Float32Array(outLen);
+  const ratio = voiceSampleRate / bgm.sampleRate;
+  const resampledVoice = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const srcPos = i * ratio;
+    const idx = Math.floor(srcPos);
+    if (idx >= voiceMono.length) break;
+    const frac = srcPos - idx;
+    const s0 = voiceMono[idx];
+    const s1 = idx + 1 < voiceMono.length ? voiceMono[idx + 1] : s0;
+    resampledVoice[i] = s0 + (s1 - s0) * frac;
+  }
+  const minGain = Math.pow(10, Math.min(-3, duckingDb) / 20);
+  const attackCoeff = Math.exp(-1 / (bgm.sampleRate * 0.035));
+  const releaseCoeff = Math.exp(-1 / (bgm.sampleRate * 0.24));
+  let env = 0;
+  let duckGain = 1;
+  for (let i = 0; i < outLen; i++) {
+    const absV = Math.abs(resampledVoice[i]);
+    env = absV > env ? env * 0.92 + absV * 0.08 : env * 0.996 + absV * 4e-3;
+    const speaking = env > 0.015;
+    const targetGain = speaking ? minGain : 1;
+    const coeff = targetGain < duckGain ? attackCoeff : releaseCoeff;
+    duckGain = targetGain + (duckGain - targetGain) * coeff;
+    const voiceBoost = resampledVoice[i] * 1.08;
+    outL[i] = Math.tanh(bgm.left[i] * duckGain + voiceBoost);
+    outR[i] = Math.tanh(bgm.right[i] * duckGain + voiceBoost);
+  }
+  return {
+    sampleRate: bgm.sampleRate,
+    left: outL,
+    right: outR
+  };
+}
 
 // server.ts
 var execFileAsync = promisify(execFile);
 var PORT = Number(process.env.PORT || 3e3);
 var EPISODE_ID_RE = /^[A-Za-z0-9_-]+$/;
 var episodesRootDir = path.resolve(process.cwd(), "episodes");
+var previewsRootDir = path.join(episodesRootDir, "_previews");
 var assetsRootDir = path.resolve(process.cwd(), "assets");
+var ALLOWED_TTS_VOICES = /* @__PURE__ */ new Set(["Charon", "Kore", "Puck", "Fenrir", "Aoede", "Zephyr"]);
+function sendBufferWithRange(req, res, buf, contentType, filename) {
+  const total = buf.length;
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "no-store");
+  if (filename) {
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+  }
+  const rangeHeader = req.headers.range;
+  if (rangeHeader && rangeHeader.startsWith("bytes=")) {
+    const parts = rangeHeader.replace(/^bytes=/, "").split("-");
+    const start = parts[0] ? parseInt(parts[0], 10) : 0;
+    const end = parts[1] ? Math.min(total - 1, parseInt(parts[1], 10)) : total - 1;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end || start >= total) {
+      res.status(416).setHeader("Content-Range", `bytes */${total}`).end();
+      return;
+    }
+    const chunk = buf.subarray(start, end + 1);
+    res.status(206);
+    res.setHeader("Content-Range", `bytes ${start}-${end}/${total}`);
+    res.setHeader("Content-Length", String(chunk.length));
+    res.send(chunk);
+    return;
+  }
+  res.setHeader("Content-Length", String(total));
+  res.send(buf);
+}
+function getMobilePreviewPath(previewKey) {
+  return path.join(previewsRootDir, `${previewKey}.mp4`);
+}
 var cachedFfmpegBinary;
 function probeFfmpegBinary(candidate) {
   try {
@@ -1635,12 +2368,30 @@ function isValidEpisodeId(id) {
 function getEpisodeManifestPath(id) {
   return path.join(episodesRootDir, id, "episode.json");
 }
+function getEpisodeVoiceoverPath(id) {
+  return path.join(episodesRootDir, id, "voiceover.wav");
+}
 function loadEpisodeManifest(id) {
   if (!isValidEpisodeId(id)) return null;
   const manifestPath = getEpisodeManifestPath(id);
   if (!fs.existsSync(manifestPath)) return null;
   const raw = fs.readFileSync(manifestPath, "utf-8");
   return JSON.parse(raw);
+}
+function buildEpisodeAudioPcmWithOptionalVoice(episodeId, episode, includeVoice = true, sampleRate = 44100) {
+  const bgm = synthesizeEpisodeAudioPcm(episode, sampleRate);
+  if (!includeVoice) return bgm;
+  const voPath = getEpisodeVoiceoverPath(episodeId);
+  if (!fs.existsSync(voPath)) return bgm;
+  try {
+    const wavBytes = new Uint8Array(fs.readFileSync(voPath));
+    const decoded = decodeWavToMonoFloat32(wavBytes);
+    const duckingDb = episode.audio?.duckingDb ?? -13;
+    return mixVoiceoverIntoStereoPcm(bgm, decoded.samples, decoded.sampleRate, duckingDb);
+  } catch (err) {
+    console.warn(`Failed to mix voiceover for ${episodeId}, falling back to pure BGM:`, err);
+    return bgm;
+  }
 }
 function isValidEpisodeManifestBody(body) {
   if (!body || typeof body !== "object") return false;
@@ -1677,7 +2428,129 @@ async function startServer() {
   app.use("/assets", express.static(assetsRootDir));
   app.get("/api/health", (_req, res) => {
     const ffmpegBin = resolveFfmpegBinary();
-    res.json({ ok: true, ffmpeg: Boolean(ffmpegBin), ffmpegPath: ffmpegBin ?? null });
+    res.json({
+      ok: true,
+      ffmpeg: Boolean(ffmpegBin),
+      ffmpegPath: ffmpegBin ?? null,
+      ttsConfigured: Boolean(process.env.GEMINI_API_KEY?.trim())
+    });
+  });
+  app.get("/api/runtime-info", (req, res) => {
+    const envAppUrl = (process.env.APP_URL || "").trim().replace(/\/+$/, "");
+    const proto = req.headers["x-forwarded-proto"]?.split(",")[0]?.trim() || req.protocol;
+    const host = req.headers["x-forwarded-host"]?.split(",")[0]?.trim() || req.get("host") || "";
+    const requestOrigin = host ? `${proto}://${host}` : "";
+    const baseUrl = envAppUrl || requestOrigin;
+    const sharedAppUrl = baseUrl.includes("://ais-dev-") ? baseUrl.replace("://ais-dev-", "://ais-pre-") : baseUrl;
+    res.json({
+      appUrl: baseUrl,
+      sharedAppUrl,
+      requestOrigin,
+      ffmpegAvailable: Boolean(resolveFfmpegBinary())
+    });
+  });
+  app.get("/api/runtime-info/check-share", async (req, res) => {
+    const envAppUrl = (process.env.APP_URL || "").trim().replace(/\/+$/, "");
+    const proto = req.headers["x-forwarded-proto"]?.split(",")[0]?.trim() || req.protocol;
+    const host = req.headers["x-forwarded-host"]?.split(",")[0]?.trim() || req.get("host") || "";
+    const requestOrigin = host ? `${proto}://${host}` : "";
+    const baseUrl = envAppUrl || requestOrigin;
+    const defaultSharedUrl = baseUrl.includes("://ais-dev-") ? baseUrl.replace("://ais-dev-", "://ais-pre-") : baseUrl;
+    let targetOrigin = defaultSharedUrl;
+    const requestedOrigin = typeof req.query.origin === "string" ? req.query.origin.trim().replace(/\/+$/, "") : "";
+    if (requestedOrigin) {
+      try {
+        const parsed = new URL(requestedOrigin);
+        const h = parsed.hostname.toLowerCase();
+        const isPrivate = parsed.protocol !== "https:" || h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || /^(\d{1,3}\.){3}\d{1,3}$/.test(h) || h.includes(":");
+        if (!isPrivate) {
+          targetOrigin = parsed.origin;
+        }
+      } catch {
+      }
+    }
+    if (!targetOrigin || !targetOrigin.startsWith("http")) {
+      res.json({ sharedAppUrl: targetOrigin, reachable: false, mode: "unreachable", statusCode: 0 });
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    try {
+      const probeRes = await fetch(`${targetOrigin}/api/health`, {
+        method: "GET",
+        redirect: "manual",
+        signal: controller.signal
+      });
+      const location = probeRes.headers.get("location") || "";
+      if (probeRes.status === 200) {
+        res.json({
+          sharedAppUrl: targetOrigin,
+          reachable: true,
+          mode: "public_open",
+          statusCode: 200
+        });
+        return;
+      }
+      if ((probeRes.status === 301 || probeRes.status === 302 || probeRes.status === 307) && (location.includes("__cookie_check") || location.includes("applet-auth-bridge") || location.includes("accounts.google.com"))) {
+        res.json({
+          sharedAppUrl: targetOrigin,
+          reachable: false,
+          mode: "auth_gated",
+          statusCode: probeRes.status
+        });
+        return;
+      }
+      res.json({
+        sharedAppUrl: targetOrigin,
+        reachable: false,
+        mode: probeRes.status === 404 ? "not_published" : "unreachable",
+        statusCode: probeRes.status
+      });
+    } catch {
+      res.json({
+        sharedAppUrl: targetOrigin,
+        reachable: false,
+        mode: "unreachable",
+        statusCode: 0
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+  app.get("/api/mobile-preview/:key/status", (req, res) => {
+    const key = String(req.params.key || "").trim();
+    if (!isValidEpisodeId(key)) {
+      res.status(400).json({ error: "Invalid preview key" });
+      return;
+    }
+    const filePath = getMobilePreviewPath(key);
+    if (!fs.existsSync(filePath)) {
+      res.json({ ready: false, key });
+      return;
+    }
+    const stat = fs.statSync(filePath);
+    res.json({
+      ready: true,
+      key,
+      sizeBytes: stat.size,
+      updatedAt: stat.mtime.toISOString(),
+      videoUrl: `/api/mobile-preview/${encodeURIComponent(key)}/video.mp4?v=${Math.floor(stat.mtimeMs)}`
+    });
+  });
+  app.get("/api/mobile-preview/:key/video.mp4", (req, res) => {
+    const key = String(req.params.key || "").trim();
+    if (!isValidEpisodeId(key)) {
+      res.status(400).json({ error: "Invalid preview key" });
+      return;
+    }
+    const filePath = getMobilePreviewPath(key);
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ error: "Mobile preview MP4 not yet rendered" });
+      return;
+    }
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(filePath);
   });
   app.get("/api/episodes", (_req, res) => {
     try {
@@ -1688,7 +2561,9 @@ async function startServer() {
       const entries = fs.readdirSync(episodesRootDir, { withFileTypes: true });
       const episodes = [];
       for (const entry of entries) {
-        if (!entry.isDirectory() || !isValidEpisodeId(entry.name)) continue;
+        if (!entry.isDirectory() || entry.name.startsWith("_") || !isValidEpisodeId(entry.name)) {
+          continue;
+        }
         const manifestPath = getEpisodeManifestPath(entry.name);
         if (!fs.existsSync(manifestPath)) continue;
         try {
@@ -1696,12 +2571,17 @@ async function startServer() {
           const episode = JSON.parse(raw);
           if (!isValidEpisodeManifestBody(episode)) continue;
           const tl = compileEpisodeTimeline(episode);
+          const episodeId = episode.id || entry.name;
           const hookScene = episode.scenes.find((s) => s.kind === "hook_live_video");
           const firstPosterScene = episode.scenes.find(
-            (s) => s.kind === "animated_poster_stage"
+            (s) => s.kind === "animated_poster_stage" || s.kind === "v3_editorial_story"
           );
+          const hasNarration = episode.scenes.some(
+            (s) => typeof s.narration === "string" && s.narration.trim().length > 0
+          );
+          const hasVoiceover = fs.existsSync(getEpisodeVoiceoverPath(episodeId));
           episodes.push({
-            id: episode.id || entry.name,
+            id: episodeId,
             date: episode.date || entry.name,
             title: episode.title || entry.name,
             seriesTitle: episode.seriesTitle || "",
@@ -1714,7 +2594,10 @@ async function startServer() {
             height: tl.height,
             shotCount: tl.shots.length,
             hookId: hookScene?.kind === "hook_live_video" ? hookScene.data.hookId : void 0,
-            posterSrc: hookScene?.kind === "hook_live_video" ? hookScene.data.posterSrc : firstPosterScene?.kind === "animated_poster_stage" ? firstPosterScene.data.imageSrc : void 0
+            posterSrc: hookScene?.kind === "hook_live_video" ? hookScene.data.posterSrc : firstPosterScene && (firstPosterScene.kind === "animated_poster_stage" || firstPosterScene.kind === "v3_editorial_story") ? firstPosterScene.data.imageSrc : void 0,
+            hasNarration,
+            hasVoiceover,
+            versionTag: episode.metadata?.versionTag
           });
         } catch {
         }
@@ -1776,6 +2659,108 @@ async function startServer() {
       res.status(500).json({ error: message });
     }
   });
+  app.post("/api/episodes/:id/voiceover", async (req, res) => {
+    const id = String(req.params.id || "");
+    if (!isValidEpisodeId(id)) {
+      res.status(400).json({ error: "Invalid episode id" });
+      return;
+    }
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    if (!apiKey) {
+      res.status(503).json({
+        error: "\u670D\u52A1\u7AEF\u672A\u914D\u7F6E GEMINI_API_KEY\uFF0C\u6682\u65E0\u6CD5\u5408\u6210 AI \u4E3B\u64AD\u914D\u97F3\uFF08\u8BF7\u5728 AI Studio Secrets \u4E2D\u914D\u7F6E\u540E\u91CD\u8BD5\uFF09\u3002"
+      });
+      return;
+    }
+    const episode = loadEpisodeManifest(id);
+    if (!episode) {
+      res.status(404).json({ error: `Episode "${id}" not found` });
+      return;
+    }
+    const tl = compileEpisodeTimeline(episode);
+    const narratedShots = tl.shots.filter(
+      (s) => typeof s.scene.narration === "string" && s.scene.narration.trim().length > 0
+    );
+    if (narratedShots.length === 0) {
+      res.status(400).json({ error: "\u5F53\u524D\u5267\u96C6\u6CA1\u6709\u914D\u7F6E\u5206\u955C\u53E3\u64AD\u7A3F\uFF08narration\uFF09" });
+      return;
+    }
+    const requestedVoice = typeof req.body?.voiceName === "string" ? req.body.voiceName.trim() : "Charon";
+    const voiceName = ALLOWED_TTS_VOICES.has(requestedVoice) ? requestedVoice : "Charon";
+    try {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: { headers: { "User-Agent": "aistudio-build" } }
+      });
+      const masterRate = 24e3;
+      const masterSamples = new Float32Array(Math.ceil(tl.durationSec * masterRate));
+      for (const shot of narratedShots) {
+        const script = shot.scene.narration.trim();
+        const response = await ai.models.generateContent({
+          model: "gemini-3.8-flash-lite-tts",
+          contents: [{ parts: [{ text: script }] }],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName }
+              }
+            },
+            speechMetadata: {
+              style: "\u5E72\u7EC3\u4E13\u4E1A\u3001\u8282\u594F\u660E\u5FEB\u7684\u4E2D\u6587\u8D22\u7ECF\u76D8\u524D\u65E9\u62A5\u4E3B\u64AD\uFF0C\u5410\u5B57\u6E05\u6670\u5229\u843D\uFF0C\u8BED\u901F\u7D27\u51D1\u81EA\u7136"
+            }
+          }
+        });
+        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (!base64Audio) {
+          throw new Error(`\u573A\u666F ${shot.id} \u914D\u97F3\u8FD4\u56DE\u7A7A\u97F3\u9891`);
+        }
+        const wavBuf = new Uint8Array(Buffer.from(base64Audio, "base64"));
+        const decoded = decodeWavToMonoFloat32(wavBuf);
+        const startOffsetSec = shot.startSec + 0.14;
+        const shotDurationSec = Math.max(0.5, shot.endSec - shot.startSec);
+        const maxClipDurSec = Math.max(0.5, shotDurationSec - 0.18);
+        const startSample = Math.floor(startOffsetSec * masterRate);
+        const maxWriteSamples = Math.min(
+          Math.floor(maxClipDurSec * masterRate),
+          masterSamples.length - startSample
+        );
+        const resampleRatio = decoded.sampleRate / masterRate;
+        const srcFrames = Math.floor(decoded.samples.length / resampleRatio);
+        const writeLen = Math.min(srcFrames, maxWriteSamples);
+        const fadeSamples = Math.min(Math.floor(masterRate * 0.04), Math.floor(writeLen * 0.15));
+        for (let i = 0; i < writeLen; i++) {
+          const srcPos = i * resampleRatio;
+          const idx = Math.floor(srcPos);
+          const frac = srcPos - idx;
+          const s0 = decoded.samples[idx] ?? 0;
+          const s1 = decoded.samples[idx + 1] ?? s0;
+          let sample = s0 + (s1 - s0) * frac;
+          if (i >= writeLen - fadeSamples && fadeSamples > 0) {
+            sample *= (writeLen - i) / fadeSamples;
+          }
+          const destIdx = startSample + i;
+          if (destIdx >= 0 && destIdx < masterSamples.length) {
+            masterSamples[destIdx] = Math.max(-1, Math.min(1, masterSamples[destIdx] + sample));
+          }
+        }
+      }
+      const masterWav = encodeMonoWav(masterSamples, masterRate);
+      const outPath = getEpisodeVoiceoverPath(id);
+      fs.writeFileSync(outPath, Buffer.from(masterWav));
+      res.json({
+        ok: true,
+        id,
+        voiceName,
+        clipCount: narratedShots.length,
+        sizeBytes: masterWav.byteLength,
+        mixedAudioUrl: `/api/audio/bgm.wav?episodeId=${encodeURIComponent(id)}&t=${Date.now()}`
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "AI \u4E3B\u64AD\u914D\u97F3\u5408\u6210\u5931\u8D25";
+      res.status(500).json({ error: message });
+    }
+  });
   app.get("/api/hooks", (_req, res) => {
     try {
       const hooksManifestPath = path.join(assetsRootDir, "hooks", "manifest.json");
@@ -1790,27 +2775,48 @@ async function startServer() {
       res.status(500).json({ error: message });
     }
   });
+  const wavBufferCache = /* @__PURE__ */ new Map();
+  const setWavCache = (key, buf, filename) => {
+    if (wavBufferCache.has(key)) wavBufferCache.delete(key);
+    wavBufferCache.set(key, { buf, filename });
+    if (wavBufferCache.size > 6) {
+      const oldestKey = wavBufferCache.keys().next().value;
+      if (oldestKey) wavBufferCache.delete(oldestKey);
+    }
+  };
   app.get("/api/audio/bgm.wav", (req, res) => {
     const episodeId = typeof req.query.episodeId === "string" ? req.query.episodeId.trim() : "";
+    const includeVoice = req.query.includeVoice !== "0";
     if (episodeId) {
       if (!isValidEpisodeId(episodeId)) {
         res.status(400).json({ error: "Invalid episodeId" });
         return;
       }
       try {
+        const epPath = getEpisodeManifestPath(episodeId);
+        if (!fs.existsSync(epPath)) {
+          res.status(404).json({ error: `Episode "${episodeId}" not found` });
+          return;
+        }
+        const voPath = getEpisodeVoiceoverPath(episodeId);
+        const epMtime = fs.statSync(epPath).mtimeMs;
+        const voMtime = includeVoice && fs.existsSync(voPath) ? fs.statSync(voPath).mtimeMs : 0;
+        const cacheKey2 = `ep:${episodeId}:${includeVoice ? 1 : 0}:${epMtime}:${voMtime}`;
+        const cached2 = wavBufferCache.get(cacheKey2);
+        if (cached2) {
+          sendBufferWithRange(req, res, cached2.buf, "audio/wav", cached2.filename);
+          return;
+        }
         const episode = loadEpisodeManifest(episodeId);
         if (!episode) {
           res.status(404).json({ error: `Episode "${episodeId}" not found` });
           return;
         }
-        const pcm2 = synthesizeEpisodeAudioPcm(episode, 44100);
-        const wav2 = encodeStereoWav(pcm2);
-        res.setHeader("Content-Type", "audio/wav");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${episodeId}_editorial_bgm.wav"`
-        );
-        res.send(Buffer.from(wav2));
+        const pcm2 = buildEpisodeAudioPcmWithOptionalVoice(episodeId, episode, includeVoice, 44100);
+        const wavBuf2 = Buffer.from(encodeStereoWav(pcm2));
+        const filename2 = `${episodeId}_editorial_mix.wav`;
+        setWavCache(cacheKey2, wavBuf2, filename2);
+        sendBufferWithRange(req, res, wavBuf2, "audio/wav", filename2);
         return;
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to synthesize episode audio";
@@ -1819,12 +2825,17 @@ async function startServer() {
       }
     }
     const track = String(req.query.track || "1120_v2");
+    const cacheKey = `track:${track}`;
+    const cached = wavBufferCache.get(cacheKey);
+    if (cached) {
+      sendBufferWithRange(req, res, cached.buf, "audio/wav", cached.filename);
+      return;
+    }
     const pcm = track === "1120_v2" ? synthesizeIntelV2TrackPcm(44100) : track === "1120" ? synthesizeIntelTrackPcm(44100) : synthesizeTrackPcm(44100);
-    const wav = encodeStereoWav(pcm);
+    const wavBuf = Buffer.from(encodeStereoWav(pcm));
     const filename = track === "1120_v2" ? "1120_v2_112bpm_editorial.wav" : track === "1120" ? "1120_108bpm_editorial_mix.wav" : "1117_129.2bpm_bgm.wav";
-    res.setHeader("Content-Type", "audio/wav");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.send(Buffer.from(wav));
+    setWavCache(cacheKey, wavBuf, filename);
+    sendBufferWithRange(req, res, wavBuf, "audio/wav", filename);
   });
   app.post("/api/export/init", (req, res) => {
     const {
@@ -1833,8 +2844,19 @@ async function startServer() {
       height = 1920,
       fps = 30,
       track = "1120",
-      episodeId
+      episodeId,
+      includeVoice = true,
+      persistPreviewKey
     } = req.body ?? {};
+    let validatedPreviewKey;
+    if (typeof persistPreviewKey === "string" && persistPreviewKey.trim()) {
+      const cleanKey = persistPreviewKey.trim();
+      if (!isValidEpisodeId(cleanKey)) {
+        res.status(400).json({ error: "Invalid persistPreviewKey" });
+        return;
+      }
+      validatedPreviewKey = cleanKey;
+    }
     let validatedEpisodeId;
     let resolvedFps = Number(fps) > 0 ? Number(fps) : 30;
     if (typeof episodeId === "string" && episodeId.trim()) {
@@ -1863,6 +2885,8 @@ async function startServer() {
       fps: resolvedFps,
       track: String(track),
       episodeId: validatedEpisodeId,
+      includeVoice: includeVoice !== false,
+      persistPreviewKey: validatedPreviewKey,
       receivedFrames: 0,
       createdAt: Date.now()
     });
@@ -1907,7 +2931,12 @@ async function startServer() {
           res.status(404).json({ error: `Episode "${sess.episodeId}" not found` });
           return;
         }
-        pcm = synthesizeEpisodeAudioPcm(episode, 44100);
+        pcm = buildEpisodeAudioPcmWithOptionalVoice(
+          sess.episodeId,
+          episode,
+          sess.includeVoice !== false,
+          44100
+        );
       } else {
         pcm = sess.track === "1120_v2" ? synthesizeIntelV2TrackPcm(44100) : sess.track === "1120" ? synthesizeIntelTrackPcm(44100) : synthesizeTrackPcm(44100);
       }
@@ -1925,6 +2954,10 @@ async function startServer() {
         "scale=trunc(iw/2)*2:trunc(ih/2)*2",
         "-c:v",
         "libx264",
+        "-profile:v",
+        "main",
+        "-level",
+        "4.0",
         "-pix_fmt",
         "yuv420p",
         "-crf",
@@ -1942,10 +2975,18 @@ async function startServer() {
       ]);
       const stat = fs.statSync(mp4Path);
       sess.mp4Path = mp4Path;
+      let previewVideoUrl;
+      if (sess.persistPreviewKey) {
+        fs.mkdirSync(previewsRootDir, { recursive: true });
+        const destPath = getMobilePreviewPath(sess.persistPreviewKey);
+        fs.copyFileSync(mp4Path, destPath);
+        previewVideoUrl = `/api/mobile-preview/${encodeURIComponent(sess.persistPreviewKey)}/video.mp4?v=${Date.now()}`;
+      }
       res.json({
         ok: true,
         sizeBytes: stat.size,
-        downloadUrl: `/api/export/${req.params.sessionId}/download`
+        downloadUrl: `/api/export/${req.params.sessionId}/download`,
+        ...previewVideoUrl ? { previewVideoUrl } : {}
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "FFmpeg render failed";
@@ -1978,6 +3019,7 @@ async function startServer() {
       res.sendFile(path.join(distDir, "index.html"));
     });
   } else {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa"
